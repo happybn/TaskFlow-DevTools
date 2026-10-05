@@ -3,6 +3,7 @@ import {
   CheckSquare, 
   FileText, 
   GitCompare,
+  KeyRound,
   Image as ImageIcon, 
   Binary, 
   Code2, 
@@ -53,6 +54,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'text_diff',
       label: 'So sánh văn bản',
       icon: <GitCompare className="w-4 h-4 shrink-0" />,
+    },
+    {
+      id: 'password_gen',
+      label: 'Tạo mật khẩu',
+      icon: <KeyRound className="w-4 h-4 shrink-0" />,
     },
     {
       id: 'image_viewer',

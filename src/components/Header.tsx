@@ -26,6 +26,10 @@ const TAB_TITLES: Record<ActiveTab, { title: string; subtitle: string; actionLab
     title: 'Text Diff · So sánh văn bản',
     subtitle: 'Đối chiếu khác biệt từng từ, tự động bôi vàng nổi bật chỗ khác nhau',
   },
+  password_gen: {
+    title: 'Password generator · Tạo mật khẩu',
+    subtitle: 'Tạo mật khẩu mạnh ngẫu nhiên bảo mật cao với Web Crypto API',
+  },
   image_viewer: {
     title: 'Soi & Xem ảnh bằng URL',
     subtitle: 'Zoom, xoay, lật và kiểm tra kích thước pixel thực tế',
