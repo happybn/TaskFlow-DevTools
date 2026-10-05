@@ -1,0 +1,7 @@
+{
+  "name": "TaskFlow & DevTools",
+  "description": "Không gian làm việc tối giản cá nhân: Quản lý task, trạng thái, ghi chú nhanh và bộ công cụ developer (View ảnh URL, Base64, JSON Studio).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
