@@ -16,7 +16,18 @@ export const storage = {
   getTasks(): Task[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.TASKS);
-      return data ? JSON.parse(data) : DEFAULT_TASKS;
+      if (!data) return DEFAULT_TASKS;
+      const parsed: Task[] = JSON.parse(data);
+      if (!Array.isArray(parsed)) return DEFAULT_TASKS;
+      // Ensure complete isolation of subtasks per task
+      return parsed.map((t) => ({
+        ...t,
+        jiraSubtaskUrls: Array.isArray(t.jiraSubtaskUrls)
+          ? [...t.jiraSubtaskUrls]
+          : t.jiraSubtaskUrl
+          ? [t.jiraSubtaskUrl]
+          : [],
+      }));
     } catch {
       return DEFAULT_TASKS;
     }

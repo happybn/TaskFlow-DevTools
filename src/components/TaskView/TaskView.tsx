@@ -14,7 +14,9 @@ import {
   FileText, 
   Copy,
   PlusCircle,
-  X
+  X,
+  ChevronDown,
+  CornerDownRight
 } from 'lucide-react';
 import { Task, TaskPriority, TaskStatus } from '../../types';
 import { useToast } from '../../context/ToastContext';
@@ -84,14 +86,14 @@ function toClickableUrl(urlOrKey?: string): string {
   return `https://${trimmed}`;
 }
 
-// Helper: Get list of subtasks from task object (with fallback)
-function getSubtaskUrls(task?: Partial<Task> | null): string[] {
+// Helper: Safely get the subtasks array strictly for this specific task
+function getTaskSubtasks(task?: Partial<Task> | null): string[] {
   if (!task) return [];
   if (Array.isArray(task.jiraSubtaskUrls) && task.jiraSubtaskUrls.length > 0) {
-    return task.jiraSubtaskUrls.filter(Boolean);
+    return [...task.jiraSubtaskUrls.filter(Boolean)];
   }
-  if (task.jiraSubtaskUrl) {
-    return [task.jiraSubtaskUrl];
+  if (task.jiraSubtaskUrl && task.jiraSubtaskUrl.trim()) {
+    return [task.jiraSubtaskUrl.trim()];
   }
   return [];
 }
@@ -104,7 +106,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
   const [statusFilter, setStatusFilter] = useState<TaskStatus | 'all'>('all');
   const [priorityFilter, setPriorityFilter] = useState<TaskPriority | 'all'>('all');
   
-  // Quick Add Form state
+  // Quick Add Form state (Only used when adding a brand new task)
   const [quickTitle, setQuickTitle] = useState('');
   const [quickJiraTaskUrl, setQuickJiraTaskUrl] = useState('');
   const [quickJiraSubtasksText, setQuickJiraSubtasksText] = useState('');
@@ -115,9 +117,13 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
   const [quickTag, setQuickTag] = useState('');
   const [isExpandingAdd, setIsExpandingAdd] = useState(false);
 
-  // Edit modal / drawer
+  // Edit modal / drawer (Deep cloned per task)
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [newSubtaskInput, setNewSubtaskInput] = useState('');
+
+  // Inline subtask popover state (which task is currently having an inline subtask added)
+  const [inlineAddingTaskId, setInlineAddingTaskId] = useState<string | null>(null);
+  const [inlineSubtaskText, setInlineSubtaskText] = useState('');
 
   // Filter tasks (matches Title, Description, Jira Task URL, Jira Subtasks URLs, Tags)
   const filteredTasks = useMemo(() => {
@@ -127,7 +133,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
         const matchesTitle = task.title.toLowerCase().includes(q);
         const matchesDesc = (task.description || '').toLowerCase().includes(q);
         const matchesJiraTask = (task.jiraTaskUrl || '').toLowerCase().includes(q);
-        const subtasks = getSubtaskUrls(task);
+        const subtasks = getTaskSubtasks(task);
         const matchesJiraSubtask = subtasks.some((s) => s.toLowerCase().includes(q));
         const matchesTag = task.tags.some((t) => t.toLowerCase().includes(q));
         if (!matchesTitle && !matchesDesc && !matchesJiraTask && !matchesJiraSubtask && !matchesTag) {
@@ -149,22 +155,33 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
     return { total, done, inProgress, rate };
   }, [tasks]);
 
-  // Handlers
+  // Open edit modal with 100% deep isolation
+  const openEditModal = (task: Task) => {
+    setEditingTask({
+      ...task,
+      jiraSubtaskUrls: getTaskSubtasks(task),
+      jiraSubtaskUrl: undefined,
+      tags: [...(task.tags || [])],
+    });
+    setNewSubtaskInput('');
+  };
+
+  // Add brand new task
   const handleAddTask = (e: React.FormEvent) => {
     e.preventDefault();
     if (!quickTitle.trim()) return;
 
-    // Parse subtasks (allow comma, semicolon or newline separated links/keys)
+    // Parse subtasks for THIS specific new task only
     const subtaskUrls = quickJiraSubtasksText
       .split(/[\n,;]+/)
       .map((s) => s.trim())
       .filter(Boolean);
 
     const newTask: Task = {
-      id: `task-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      id: `task-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       title: quickTitle.trim(),
       jiraTaskUrl: quickJiraTaskUrl.trim() || undefined,
-      jiraSubtaskUrls: subtaskUrls.length > 0 ? subtaskUrls : undefined,
+      jiraSubtaskUrls: [...subtaskUrls], // Fresh isolated array
       description: quickDescription.trim(),
       status: quickStatus,
       priority: quickPriority,
@@ -174,12 +191,15 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
     };
 
     setTasks((prev) => [newTask, ...prev]);
+
+    // Reset ALL inputs and collapse expanded panel immediately
     setQuickTitle('');
     setQuickJiraTaskUrl('');
     setQuickJiraSubtasksText('');
     setQuickDescription('');
     setQuickDueDate('');
     setQuickTag('');
+    setIsExpandingAdd(false);
     showToast('Đã thêm công việc mới');
   };
 
@@ -237,40 +257,89 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
     showToast(`Đã chép ${label}`);
   };
 
-  // Subtask management in Edit Modal
+  // Add subtask directly to a specific task (without modal)
+  const handleAddInlineSubtask = (taskId: string) => {
+    if (!inlineSubtaskText.trim()) return;
+    const splitUrls = inlineSubtaskText
+      .split(/[\n,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t.id === taskId) {
+          const currentList = getTaskSubtasks(t);
+          return {
+            ...t,
+            jiraSubtaskUrls: [...currentList, ...splitUrls],
+            jiraSubtaskUrl: undefined,
+          };
+        }
+        return t;
+      })
+    );
+
+    setInlineAddingTaskId(null);
+    setInlineSubtaskText('');
+    showToast(`Đã thêm subtask vào task này`);
+  };
+
+  // Remove a subtask directly from a specific task
+  const handleRemoveSubtaskFromTask = (taskId: string, indexToRemove: number, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t.id === taskId) {
+          const currentList = getTaskSubtasks(t);
+          const updated = currentList.filter((_, idx) => idx !== indexToRemove);
+          return {
+            ...t,
+            jiraSubtaskUrls: updated,
+            jiraSubtaskUrl: undefined,
+          };
+        }
+        return t;
+      })
+    );
+    showToast('Đã xóa subtask khỏi task này');
+  };
+
+  // Subtask management inside Edit Modal
   const handleAddSubtaskToEditing = () => {
     if (!editingTask || !newSubtaskInput.trim()) return;
     const splitUrls = newSubtaskInput
       .split(/[\n,;]+/)
       .map((s) => s.trim())
       .filter(Boolean);
-    const currentList = getSubtaskUrls(editingTask);
-    const updated = [...currentList, ...splitUrls];
+    const currentList = getTaskSubtasks(editingTask);
     setEditingTask({
       ...editingTask,
-      jiraSubtaskUrls: updated,
+      jiraSubtaskUrls: [...currentList, ...splitUrls],
+      jiraSubtaskUrl: undefined,
     });
     setNewSubtaskInput('');
-    showToast(`Đã thêm ${splitUrls.length} link subtask`);
+    showToast(`Đã thêm ${splitUrls.length} subtask vào công việc này`);
   };
 
   const handleRemoveSubtaskFromEditing = (index: number) => {
     if (!editingTask) return;
-    const currentList = getSubtaskUrls(editingTask);
+    const currentList = getTaskSubtasks(editingTask);
     const updated = currentList.filter((_, idx) => idx !== index);
     setEditingTask({
       ...editingTask,
       jiraSubtaskUrls: updated,
+      jiraSubtaskUrl: undefined,
     });
   };
 
   const handleUpdateSubtaskInEditing = (index: number, val: string) => {
     if (!editingTask) return;
-    const currentList = [...getSubtaskUrls(editingTask)];
+    const currentList = [...getTaskSubtasks(editingTask)];
     currentList[index] = val;
     setEditingTask({
       ...editingTask,
       jiraSubtaskUrls: currentList,
+      jiraSubtaskUrl: undefined,
     });
   };
 
@@ -328,7 +397,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
           </div>
         </div>
 
-        {/* Quick Add Form */}
+        {/* Quick Add Form: Dành riêng cho tạo task mới */}
         <form onSubmit={handleAddTask} className="mb-4">
           <div className="flex items-center gap-2 bg-neutral-50 dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700/80 rounded-md p-1.5 focus-within:border-neutral-500 transition-colors">
             <Plus className="w-4 h-4 text-neutral-400 ml-1.5 shrink-0" />
@@ -367,7 +436,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
             <button
               type="button"
               onClick={() => setIsExpandingAdd(!isExpandingAdd)}
-              title="Thêm link Jira, danh sách subtasks hoặc ghi chú"
+              title="Thêm link Jira, subtasks hoặc ghi chú cho task mới này"
               className={`flex items-center gap-1 px-2 py-1 text-xs rounded transition-colors ${
                 isExpandingAdd || quickJiraTaskUrl || quickJiraSubtasksText || quickDescription
                   ? 'bg-neutral-200 dark:bg-neutral-800 text-neutral-900 dark:text-white font-medium'
@@ -387,7 +456,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
             </button>
           </div>
 
-          {/* Expanded Add Bar: Jira task, Jira subtask(s), Ghi chú, Deadline, Tag */}
+          {/* Expanded Add Bar: Chỉ áp dụng khi bấm Thêm cho task mới */}
           {isExpandingAdd && (
             <div className="mt-2 p-3 text-xs bg-neutral-50 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 rounded-md flex flex-col gap-2.5 animate-in fade-in">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
@@ -403,14 +472,14 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                   />
                 </div>
 
-                {/* Link subtask(s) Jira - Hỗ trợ nhiều link */}
+                {/* Link subtask(s) Jira */}
                 <div className="flex items-center gap-2 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded px-2.5 py-1.5">
                   <Link2 className="w-3.5 h-3.5 text-sky-500 shrink-0" />
                   <input
                     type="text"
                     value={quickJiraSubtasksText}
                     onChange={(e) => setQuickJiraSubtasksText(e.target.value)}
-                    placeholder="Các link subtask (phân cách bằng dấu phẩy: PROJ-102, PROJ-103)"
+                    placeholder="Các subtask của task này (phân cách bằng dấu phẩy: PROJ-102, PROJ-103)"
                     className="flex-1 bg-transparent text-xs text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-none"
                   />
                 </div>
@@ -550,7 +619,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
               const priorityInfo = PRIORITY_CONFIG[task.priority];
               const isOverdue = task.dueDate && !isDone && new Date(task.dueDate).getTime() < new Date().setHours(0,0,0,0);
               const jiraTaskKey = getJiraKey(task.jiraTaskUrl);
-              const subtasks = getSubtaskUrls(task);
+              const taskSubtasks = getTaskSubtasks(task); // Strictly isolated per task
 
               return (
                 <div
@@ -577,7 +646,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                       <div className="flex flex-wrap items-center gap-2">
                         {/* 1. Tiêu đề */}
                         <span
-                          onClick={() => setEditingTask(task)}
+                          onClick={() => openEditModal(task)}
                           className={`text-xs font-semibold cursor-pointer truncate ${
                             isDone
                               ? 'line-through text-neutral-400 dark:text-neutral-500'
@@ -587,7 +656,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                           {task.title}
                         </span>
 
-                        {/* 2. Link task Jira */}
+                        {/* 2. Link task Jira chính */}
                         {task.jiraTaskUrl && (
                           <a
                             href={toClickableUrl(task.jiraTaskUrl)}
@@ -602,30 +671,95 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                           </a>
                         )}
 
-                        {/* 3. Danh sách Link subtask Jira (hỗ trợ nhiều subtasks) */}
-                        {subtasks.map((subUrl, idx) => {
+                        {/* 3. Danh sách Link subtask riêng của task này */}
+                        {taskSubtasks.map((subUrl, idx) => {
                           const subKey = getJiraKey(subUrl);
                           return (
-                            <a
+                            <div
                               key={idx}
-                              href={toClickableUrl(subUrl)}
-                              target="_blank"
-                              rel="noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-mono font-medium text-sky-600 dark:text-sky-400 hover:bg-sky-50 dark:hover:bg-sky-950/50 border border-sky-200 dark:border-sky-900 transition-colors shrink-0"
-                              title={`Mở subtask Jira: ${subUrl}`}
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-mono font-medium text-sky-600 dark:text-sky-400 bg-sky-50 dark:bg-sky-950/50 border border-sky-200 dark:border-sky-900 group/sub"
                             >
-                              <ExternalLink className="w-2.5 h-2.5" />
-                              <span>Sub: {subKey}</span>
-                            </a>
+                              <a
+                                href={toClickableUrl(subUrl)}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center gap-1 hover:underline"
+                                title={`Mở subtask Jira: ${subUrl}`}
+                              >
+                                <ExternalLink className="w-2.5 h-2.5" />
+                                <span>Sub: {subKey}</span>
+                              </a>
+                              <button
+                                type="button"
+                                onClick={(e) => handleRemoveSubtaskFromTask(task.id, idx, e)}
+                                title="Xóa subtask này khỏi task"
+                                className="text-neutral-400 hover:text-rose-500 ml-0.5 opacity-0 group-hover/sub:opacity-100 transition-opacity"
+                              >
+                                <X className="w-2.5 h-2.5" />
+                              </button>
+                            </div>
                           );
                         })}
+
+                        {/* Nút thêm nhanh subtask cho riêng task này */}
+                        {inlineAddingTaskId !== task.id ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setInlineAddingTaskId(task.id);
+                              setInlineSubtaskText('');
+                            }}
+                            className="inline-flex items-center gap-0.5 text-[10px] text-neutral-400 hover:text-sky-500 transition-colors opacity-0 group-hover:opacity-100"
+                            title="Thêm subtask cho task này"
+                          >
+                            <Plus className="w-3 h-3" />
+                            <span>Subtask</span>
+                          </button>
+                        ) : (
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded px-1.5 py-0.5 shadow-sm"
+                          >
+                            <input
+                              type="text"
+                              autoFocus
+                              value={inlineSubtaskText}
+                              onChange={(e) => setInlineSubtaskText(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleAddInlineSubtask(task.id);
+                                } else if (e.key === 'Escape') {
+                                  setInlineAddingTaskId(null);
+                                }
+                              }}
+                              placeholder="Mã hoặc link subtask..."
+                              className="text-[11px] font-mono bg-transparent text-neutral-900 dark:text-white focus:outline-none w-36"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleAddInlineSubtask(task.id)}
+                              className="text-[10px] px-1.5 py-0.5 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 rounded font-medium"
+                            >
+                              Lưu
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setInlineAddingTaskId(null)}
+                              className="text-neutral-400 hover:text-neutral-700 dark:hover:text-white"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        )}
                       </div>
 
                       {/* 4. Ghi chú */}
                       {task.description && (
                         <p
-                          onClick={() => setEditingTask(task)}
+                          onClick={() => openEditModal(task)}
                           className="text-[11px] text-neutral-600 dark:text-neutral-400 mt-1 line-clamp-2 cursor-pointer hover:text-neutral-900 dark:hover:text-neutral-200"
                         >
                           {task.description}
@@ -676,7 +810,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                     </select>
 
                     <button
-                      onClick={() => setEditingTask(task)}
+                      onClick={() => openEditModal(task)}
                       title="Sửa chi tiết"
                       className="p-1 text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 transition-colors"
                     >
@@ -722,13 +856,13 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                   <div className="flex flex-col gap-2 flex-1">
                     {columnTasks.map((task) => {
                       const jiraTaskKey = getJiraKey(task.jiraTaskUrl);
-                      const subtasks = getSubtaskUrls(task);
+                      const taskSubtasks = getTaskSubtasks(task); // Strictly isolated per task
 
                       return (
                         <div
                           key={task.id}
                           className="p-3 bg-white dark:bg-neutral-800/90 rounded border border-neutral-200 dark:border-neutral-700/60 shadow-xs hover:border-neutral-400 dark:hover:border-neutral-600 transition-all flex flex-col gap-2 cursor-pointer"
-                          onClick={() => setEditingTask(task)}
+                          onClick={() => openEditModal(task)}
                         >
                           <div className="flex items-start justify-between gap-2">
                             {/* 1. Tiêu đề */}
@@ -741,7 +875,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                           </div>
 
                           {/* 2 & 3. Link Jira Task & Multiple Subtask badges */}
-                          {(task.jiraTaskUrl || subtasks.length > 0) && (
+                          {(task.jiraTaskUrl || taskSubtasks.length > 0) && (
                             <div className="flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
                               {task.jiraTaskUrl && (
                                 <a
@@ -755,7 +889,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                                   <span>Jira: {jiraTaskKey}</span>
                                 </a>
                               )}
-                              {subtasks.map((subUrl, idx) => (
+                              {taskSubtasks.map((subUrl, idx) => (
                                 <a
                                   key={idx}
                                   href={toClickableUrl(subUrl)}
@@ -832,7 +966,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
         )}
       </div>
 
-      {/* Edit Task Drawer / Modal */}
+      {/* Edit Task Drawer / Modal - Đảm bảo cách ly 100% dữ liệu riêng cho từng task */}
       {editingTask && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-lg max-w-lg w-full p-5 shadow-xl flex flex-col gap-4 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
@@ -900,20 +1034,20 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                 />
               </div>
 
-              {/* 3. Danh sách Link subtask Jira (Nhiều subtask) */}
+              {/* 3. Danh sách Link subtask Jira riêng của task này */}
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="text-[11px] font-semibold text-neutral-700 dark:text-neutral-300">
-                    3. Danh sách link subtask Jira ({getSubtaskUrls(editingTask).length})
+                    3. Danh sách link subtask ({getTaskSubtasks(editingTask).length})
                   </label>
                   <span className="text-[10px] text-neutral-400">
-                    Có thể có nhiều subtasks
+                    Riêng biệt cho task này
                   </span>
                 </div>
 
                 {/* Subtasks List */}
                 <div className="flex flex-col gap-1.5 mb-2">
-                  {getSubtaskUrls(editingTask).map((subUrl, idx) => (
+                  {getTaskSubtasks(editingTask).map((subUrl, idx) => (
                     <div key={idx} className="flex items-center gap-1.5 bg-neutral-50 dark:bg-neutral-800/80 p-1.5 rounded border border-neutral-200 dark:border-neutral-700">
                       <span className="text-[10px] font-mono text-neutral-400 w-4 text-center">
                         {idx + 1}.
@@ -952,6 +1086,12 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                       </button>
                     </div>
                   ))}
+
+                  {getTaskSubtasks(editingTask).length === 0 && (
+                    <div className="text-[11px] text-neutral-400 italic py-1 px-1">
+                      Task này chưa có subtask nào. Nhập bên dưới để thêm.
+                    </div>
+                  )}
                 </div>
 
                 {/* Add new subtask input bar */}
@@ -966,7 +1106,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                         handleAddSubtaskToEditing();
                       }
                     }}
-                    placeholder="Dán link hoặc mã subtask mới (VD: PROJ-102, PROJ-103)..."
+                    placeholder="Dán link hoặc mã subtask mới (VD: PROJ-102)..."
                     className="flex-1 text-xs p-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-900 dark:text-white font-mono focus:outline-none"
                   />
                   <button
@@ -1087,9 +1227,20 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                 <button
                   type="button"
                   onClick={() => {
-                    setTasks((prev) => prev.map((t) => (t.id === editingTask.id ? editingTask : t)));
+                    const finalSubtasks = getTaskSubtasks(editingTask);
+                    setTasks((prev) =>
+                      prev.map((t) =>
+                        t.id === editingTask.id
+                          ? {
+                              ...editingTask,
+                              jiraSubtaskUrls: [...finalSubtasks],
+                              jiraSubtaskUrl: undefined,
+                            }
+                          : t
+                      )
+                    );
                     setEditingTask(null);
-                    showToast('Đã lưu thay đổi công việc');
+                    showToast('Đã lưu thay đổi cho công việc này');
                   }}
                   className="px-3.5 py-1.5 text-xs bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 font-medium rounded hover:bg-neutral-800 dark:hover:bg-neutral-200 transition-colors"
                 >
