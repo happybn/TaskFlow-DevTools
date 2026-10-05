@@ -2,6 +2,7 @@ import React from 'react';
 import { 
   CheckSquare, 
   FileText, 
+  GitCompare,
   Image as ImageIcon, 
   Binary, 
   Code2, 
@@ -47,6 +48,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Ghi chú',
       icon: <FileText className="w-4 h-4 shrink-0" />,
       badge: notesCount,
+    },
+    {
+      id: 'text_diff',
+      label: 'So sánh văn bản',
+      icon: <GitCompare className="w-4 h-4 shrink-0" />,
     },
     {
       id: 'image_viewer',

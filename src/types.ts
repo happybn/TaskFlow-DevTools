@@ -26,7 +26,7 @@ export interface Note {
   updatedAt: number;
 }
 
-export type ActiveTab = 'tasks' | 'notes' | 'image_viewer' | 'base64' | 'json_studio' | 'mini_tools';
+export type ActiveTab = 'tasks' | 'notes' | 'text_diff' | 'image_viewer' | 'base64' | 'json_studio' | 'mini_tools';
 
 export interface RecentImageUrl {
   url: string;

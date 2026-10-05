@@ -15,8 +15,7 @@ import {
   Copy,
   PlusCircle,
   X,
-  ChevronDown,
-  CornerDownRight
+  Layers
 } from 'lucide-react';
 import { Task, TaskPriority, TaskStatus } from '../../types';
 import { useToast } from '../../context/ToastContext';
@@ -90,7 +89,7 @@ function toClickableUrl(urlOrKey?: string): string {
 function getTaskSubtasks(task?: Partial<Task> | null): string[] {
   if (!task) return [];
   if (Array.isArray(task.jiraSubtaskUrls) && task.jiraSubtaskUrls.length > 0) {
-    return [...task.jiraSubtaskUrls.filter(Boolean)];
+    return [...task.jiraSubtaskUrls.map((s) => s.trim()).filter(Boolean)];
   }
   if (task.jiraSubtaskUrl && task.jiraSubtaskUrl.trim()) {
     return [task.jiraSubtaskUrl.trim()];
@@ -169,7 +168,10 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
   // Add brand new task
   const handleAddTask = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!quickTitle.trim()) return;
+    if (!quickTitle.trim()) {
+      showToast('Vui lòng nhập tiêu đề công việc trước khi thêm', 'error');
+      return;
+    }
 
     // Parse subtasks for THIS specific new task only
     const subtaskUrls = quickJiraSubtasksText
@@ -257,13 +259,23 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
     showToast(`Đã chép ${label}`);
   };
 
-  // Add subtask directly to a specific task (without modal)
-  const handleAddInlineSubtask = (taskId: string) => {
-    if (!inlineSubtaskText.trim()) return;
+  // Add subtask directly to a specific task (from inline row or kanban)
+  const handleAddInlineSubtask = (taskId: string, e?: React.FormEvent | React.MouseEvent) => {
+    e?.preventDefault();
+    e?.stopPropagation();
+    if (!inlineSubtaskText.trim()) {
+      setInlineAddingTaskId(null);
+      return;
+    }
     const splitUrls = inlineSubtaskText
       .split(/[\n,;]+/)
       .map((s) => s.trim())
       .filter(Boolean);
+
+    if (splitUrls.length === 0) {
+      setInlineAddingTaskId(null);
+      return;
+    }
 
     setTasks((prev) =>
       prev.map((t) => {
@@ -281,7 +293,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
 
     setInlineAddingTaskId(null);
     setInlineSubtaskText('');
-    showToast(`Đã thêm subtask vào task này`);
+    showToast(`Đã lưu thêm ${splitUrls.length} subtask`);
   };
 
   // Remove a subtask directly from a specific task
@@ -318,7 +330,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
       jiraSubtaskUrl: undefined,
     });
     setNewSubtaskInput('');
-    showToast(`Đã thêm ${splitUrls.length} subtask vào công việc này`);
+    showToast(`Đã thêm ${splitUrls.length} subtask`);
   };
 
   const handleRemoveSubtaskFromEditing = (index: number) => {
@@ -341,6 +353,36 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
       jiraSubtaskUrls: currentList,
       jiraSubtaskUrl: undefined,
     });
+  };
+
+  // Save changes from Edit Modal (Auto-includes any pending input in newSubtaskInput)
+  const handleSaveEditModal = () => {
+    if (!editingTask) return;
+
+    // 1. Existing subtasks in list
+    const currentSubtasks = getTaskSubtasks(editingTask);
+
+    // 2. CRITICAL FIX: If user typed in newSubtaskInput and directly clicked "Lưu thay đổi"
+    // without clicking "+ Thêm", automatically include it!
+    const pendingFromInput = newSubtaskInput
+      .split(/[\n,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const mergedSubtasks = [...currentSubtasks, ...pendingFromInput];
+
+    const updatedTask: Task = {
+      ...editingTask,
+      title: editingTask.title.trim() || 'Công việc chưa đặt tên',
+      jiraTaskUrl: editingTask.jiraTaskUrl?.trim() || undefined,
+      jiraSubtaskUrls: mergedSubtasks,
+      jiraSubtaskUrl: undefined,
+    };
+
+    setTasks((prev) => prev.map((t) => (t.id === updatedTask.id ? updatedTask : t)));
+    setEditingTask(null);
+    setNewSubtaskInput('');
+    showToast(`Đã lưu thay đổi thành công (${mergedSubtasks.length} subtask)`);
   };
 
   return (
@@ -449,8 +491,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
 
             <button
               type="submit"
-              disabled={!quickTitle.trim()}
-              className="px-3 py-1 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 font-medium text-xs rounded hover:bg-neutral-800 dark:hover:bg-neutral-200 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              className="px-3 py-1 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 font-medium text-xs rounded hover:bg-neutral-800 dark:hover:bg-neutral-200 transition-all"
             >
               Thêm
             </button>
@@ -474,7 +515,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
 
                 {/* Link subtask(s) Jira */}
                 <div className="flex items-center gap-2 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded px-2.5 py-1.5">
-                  <Link2 className="w-3.5 h-3.5 text-sky-500 shrink-0" />
+                  <Layers className="w-3.5 h-3.5 text-sky-500 shrink-0" />
                   <input
                     type="text"
                     value={quickJiraSubtasksText}
@@ -619,7 +660,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
               const priorityInfo = PRIORITY_CONFIG[task.priority];
               const isOverdue = task.dueDate && !isDone && new Date(task.dueDate).getTime() < new Date().setHours(0,0,0,0);
               const jiraTaskKey = getJiraKey(task.jiraTaskUrl);
-              const taskSubtasks = getTaskSubtasks(task); // Strictly isolated per task
+              const taskSubtasks = getTaskSubtasks(task);
 
               return (
                 <div
@@ -711,14 +752,15 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                               setInlineAddingTaskId(task.id);
                               setInlineSubtaskText('');
                             }}
-                            className="inline-flex items-center gap-0.5 text-[10px] text-neutral-400 hover:text-sky-500 transition-colors opacity-0 group-hover:opacity-100"
+                            className="inline-flex items-center gap-0.5 text-[10px] text-neutral-400 hover:text-sky-500 transition-colors opacity-0 group-hover:opacity-100 px-1 py-0.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800"
                             title="Thêm subtask cho task này"
                           >
                             <Plus className="w-3 h-3" />
                             <span>Subtask</span>
                           </button>
                         ) : (
-                          <div
+                          <form
+                            onSubmit={(e) => handleAddInlineSubtask(task.id, e)}
                             onClick={(e) => e.stopPropagation()}
                             className="inline-flex items-center gap-1 bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded px-1.5 py-0.5 shadow-sm"
                           >
@@ -728,10 +770,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                               value={inlineSubtaskText}
                               onChange={(e) => setInlineSubtaskText(e.target.value)}
                               onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  e.preventDefault();
-                                  handleAddInlineSubtask(task.id);
-                                } else if (e.key === 'Escape') {
+                                if (e.key === 'Escape') {
                                   setInlineAddingTaskId(null);
                                 }
                               }}
@@ -739,9 +778,8 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                               className="text-[11px] font-mono bg-transparent text-neutral-900 dark:text-white focus:outline-none w-36"
                             />
                             <button
-                              type="button"
-                              onClick={() => handleAddInlineSubtask(task.id)}
-                              className="text-[10px] px-1.5 py-0.5 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 rounded font-medium"
+                              type="submit"
+                              className="text-[10px] px-1.5 py-0.5 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 rounded font-medium hover:bg-neutral-800"
                             >
                               Lưu
                             </button>
@@ -752,7 +790,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                             >
                               <X className="w-3 h-3" />
                             </button>
-                          </div>
+                          </form>
                         )}
                       </div>
 
@@ -856,7 +894,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                   <div className="flex flex-col gap-2 flex-1">
                     {columnTasks.map((task) => {
                       const jiraTaskKey = getJiraKey(task.jiraTaskUrl);
-                      const taskSubtasks = getTaskSubtasks(task); // Strictly isolated per task
+                      const taskSubtasks = getTaskSubtasks(task);
 
                       return (
                         <div
@@ -966,7 +1004,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
         )}
       </div>
 
-      {/* Edit Task Drawer / Modal - Đảm bảo cách ly 100% dữ liệu riêng cho từng task */}
+      {/* Edit Task Drawer / Modal */}
       {editingTask && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-lg max-w-lg w-full p-5 shadow-xl flex flex-col gap-4 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
@@ -1037,16 +1075,19 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
               {/* 3. Danh sách Link subtask Jira riêng của task này */}
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-[11px] font-semibold text-neutral-700 dark:text-neutral-300">
-                    3. Danh sách link subtask ({getTaskSubtasks(editingTask).length})
+                  <label className="text-[11px] font-semibold text-neutral-700 dark:text-neutral-300 flex items-center gap-1.5">
+                    <span>3. Danh sách link subtask</span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 bg-neutral-200 dark:bg-neutral-800 rounded text-neutral-700 dark:text-neutral-300">
+                      {getTaskSubtasks(editingTask).length}
+                    </span>
                   </label>
                   <span className="text-[10px] text-neutral-400">
-                    Riêng biệt cho task này
+                    Bấm Lưu bên dưới để lưu tất cả
                   </span>
                 </div>
 
                 {/* Subtasks List */}
-                <div className="flex flex-col gap-1.5 mb-2">
+                <div className="flex flex-col gap-1.5 mb-2.5">
                   {getTaskSubtasks(editingTask).map((subUrl, idx) => (
                     <div key={idx} className="flex items-center gap-1.5 bg-neutral-50 dark:bg-neutral-800/80 p-1.5 rounded border border-neutral-200 dark:border-neutral-700">
                       <span className="text-[10px] font-mono text-neutral-400 w-4 text-center">
@@ -1088,8 +1129,8 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                   ))}
 
                   {getTaskSubtasks(editingTask).length === 0 && (
-                    <div className="text-[11px] text-neutral-400 italic py-1 px-1">
-                      Task này chưa có subtask nào. Nhập bên dưới để thêm.
+                    <div className="text-[11px] text-neutral-400 italic py-1.5 px-2 bg-neutral-50/50 dark:bg-neutral-800/30 rounded border border-dashed border-neutral-200 dark:border-neutral-800">
+                      Task này chưa có subtask nào. Nhập vào ô bên dưới rồi bấm "Thêm" hoặc bấm "Lưu thay đổi".
                     </div>
                   )}
                 </div>
@@ -1106,19 +1147,22 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                         handleAddSubtaskToEditing();
                       }
                     }}
-                    placeholder="Dán link hoặc mã subtask mới (VD: PROJ-102)..."
-                    className="flex-1 text-xs p-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-900 dark:text-white font-mono focus:outline-none"
+                    placeholder="Nhập link hoặc mã subtask (VD: PROJ-102, PROJ-103)..."
+                    className="flex-1 text-xs p-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded text-neutral-900 dark:text-white font-mono focus:outline-none focus:border-neutral-500"
                   />
                   <button
                     type="button"
                     onClick={handleAddSubtaskToEditing}
                     disabled={!newSubtaskInput.trim()}
-                    className="flex items-center gap-1 px-3 py-2 text-xs font-medium bg-neutral-100 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 disabled:opacity-40 transition-colors"
+                    className="flex items-center gap-1 px-3 py-2 text-xs font-medium bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 rounded hover:bg-neutral-800 dark:hover:bg-neutral-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
                     <Plus className="w-3 h-3" />
                     <span>Thêm</span>
                   </button>
                 </div>
+                <p className="text-[10px] text-neutral-400 mt-1">
+                  Mẹo: Bạn có thể nhập nhiều subtask phân cách bằng dấu phẩy. Khi bấm nút <strong>Lưu thay đổi</strong> bên dưới, subtask đang gõ trong ô cũng sẽ được tự động lưu!
+                </p>
               </div>
 
               {/* 4. Ghi chú */}
@@ -1226,23 +1270,8 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    const finalSubtasks = getTaskSubtasks(editingTask);
-                    setTasks((prev) =>
-                      prev.map((t) =>
-                        t.id === editingTask.id
-                          ? {
-                              ...editingTask,
-                              jiraSubtaskUrls: [...finalSubtasks],
-                              jiraSubtaskUrl: undefined,
-                            }
-                          : t
-                      )
-                    );
-                    setEditingTask(null);
-                    showToast('Đã lưu thay đổi cho công việc này');
-                  }}
-                  className="px-3.5 py-1.5 text-xs bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 font-medium rounded hover:bg-neutral-800 dark:hover:bg-neutral-200 transition-colors"
+                  onClick={handleSaveEditModal}
+                  className="px-4 py-1.5 text-xs bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 font-semibold rounded hover:bg-neutral-800 dark:hover:bg-neutral-200 transition-colors shadow-xs"
                 >
                   Lưu thay đổi
                 </button>

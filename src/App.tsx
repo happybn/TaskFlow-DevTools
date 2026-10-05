@@ -6,6 +6,7 @@ import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { TaskView } from './components/TaskView/TaskView';
 import { NoteView } from './components/NoteView/NoteView';
+import { TextDiffTool } from './components/Tools/TextDiffTool';
 import { ImageViewer } from './components/Tools/ImageViewer';
 import { Base64Tool } from './components/Tools/Base64Tool';
 import { JsonTool } from './components/Tools/JsonTool';
@@ -106,10 +107,10 @@ function AppContent() {
   // Global Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Alt + 1..6 or Ctrl + 1..6 to switch tabs quickly
-      if ((e.altKey || e.metaKey) && e.key >= '1' && e.key <= '6') {
+      // Alt + 1..7 or Ctrl + 1..7 to switch tabs quickly
+      if ((e.altKey || e.metaKey) && e.key >= '1' && e.key <= '7') {
         e.preventDefault();
-        const tabList: ActiveTab[] = ['tasks', 'notes', 'image_viewer', 'base64', 'json_studio', 'mini_tools'];
+        const tabList: ActiveTab[] = ['tasks', 'notes', 'text_diff', 'image_viewer', 'base64', 'json_studio', 'mini_tools'];
         const index = parseInt(e.key) - 1;
         if (tabList[index]) {
           setActiveTab(tabList[index]);
@@ -196,6 +197,8 @@ function AppContent() {
               searchQuery={searchQuery}
             />
           )}
+
+          {activeTab === 'text_diff' && <TextDiffTool />}
 
           {activeTab === 'image_viewer' && (
             <ImageViewer

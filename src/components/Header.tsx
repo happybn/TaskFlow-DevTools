@@ -22,6 +22,10 @@ const TAB_TITLES: Record<ActiveTab, { title: string; subtitle: string; actionLab
     subtitle: 'Ý tưởng, snippets và tài liệu cá nhân',
     actionLabel: '+ Ghi chú mới',
   },
+  text_diff: {
+    title: 'Text Diff · So sánh văn bản',
+    subtitle: 'Đối chiếu khác biệt từng từ, tự động bôi vàng nổi bật chỗ khác nhau',
+  },
   image_viewer: {
     title: 'Soi & Xem ảnh bằng URL',
     subtitle: 'Zoom, xoay, lật và kiểm tra kích thước pixel thực tế',
