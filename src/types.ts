@@ -4,7 +4,10 @@ export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
 export interface Task {
   id: string;
   title: string;
-  description: string;
+  description: string; // Ghi chú
+  jiraTaskUrl?: string; // Link task Jira
+  jiraSubtaskUrls?: string[]; // Danh sách link subtask Jira (hỗ trợ nhiều subtasks)
+  jiraSubtaskUrl?: string; // Tương thích ngược nếu có dữ liệu đơn
   status: TaskStatus;
   priority: TaskPriority;
   tags: string[];

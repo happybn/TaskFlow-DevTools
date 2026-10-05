@@ -1,19 +1,20 @@
 import React, { useState, useMemo } from 'react';
 import { 
   Plus, 
-  Check, 
   Trash2, 
-  Clock, 
   Calendar, 
   Tag, 
-  ChevronRight, 
-  ListFilter, 
   Kanban, 
   List, 
-  MoreVertical,
-  CheckCircle2,
-  Circle,
-  AlertCircle
+  MoreVertical, 
+  CheckCircle2, 
+  Circle, 
+  ExternalLink, 
+  Link2, 
+  FileText, 
+  Copy,
+  PlusCircle,
+  X
 } from 'lucide-react';
 import { Task, TaskPriority, TaskStatus } from '../../types';
 import { useToast } from '../../context/ToastContext';
@@ -54,6 +55,47 @@ const PRIORITY_CONFIG: Record<TaskPriority, { label: string; color: string }> = 
   urgent: { label: 'Gấp', color: 'text-rose-500 dark:text-rose-400' },
 };
 
+// Helper: Extract clean Jira Issue Key for display
+function getJiraKey(urlOrKey?: string): string {
+  if (!urlOrKey) return '';
+  const trimmed = urlOrKey.trim();
+  const browseMatch = trimmed.match(/\/browse\/([A-Za-z0-9_]+-\d+)/i);
+  if (browseMatch) return browseMatch[1].toUpperCase();
+  const keyMatch = trimmed.match(/([A-Za-z0-9_]+-\d+)/i);
+  if (keyMatch) return keyMatch[1].toUpperCase();
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    try {
+      const u = new URL(trimmed);
+      return u.pathname.split('/').filter(Boolean).pop() || 'Jira';
+    } catch {
+      return 'Jira';
+    }
+  }
+  return trimmed;
+}
+
+// Helper: Ensure valid http URL for browser clicking
+function toClickableUrl(urlOrKey?: string): string {
+  if (!urlOrKey) return '';
+  const trimmed = urlOrKey.trim();
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return trimmed;
+  }
+  return `https://${trimmed}`;
+}
+
+// Helper: Get list of subtasks from task object (with fallback)
+function getSubtaskUrls(task?: Partial<Task> | null): string[] {
+  if (!task) return [];
+  if (Array.isArray(task.jiraSubtaskUrls) && task.jiraSubtaskUrls.length > 0) {
+    return task.jiraSubtaskUrls.filter(Boolean);
+  }
+  if (task.jiraSubtaskUrl) {
+    return [task.jiraSubtaskUrl];
+  }
+  return [];
+}
+
 export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery }) => {
   const { showToast } = useToast();
   
@@ -64,6 +106,9 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
   
   // Quick Add Form state
   const [quickTitle, setQuickTitle] = useState('');
+  const [quickJiraTaskUrl, setQuickJiraTaskUrl] = useState('');
+  const [quickJiraSubtasksText, setQuickJiraSubtasksText] = useState('');
+  const [quickDescription, setQuickDescription] = useState('');
   const [quickStatus, setQuickStatus] = useState<TaskStatus>('todo');
   const [quickPriority, setQuickPriority] = useState<TaskPriority>('medium');
   const [quickDueDate, setQuickDueDate] = useState('');
@@ -72,21 +117,24 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
 
   // Edit modal / drawer
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [newSubtaskInput, setNewSubtaskInput] = useState('');
 
-  // Filter tasks
+  // Filter tasks (matches Title, Description, Jira Task URL, Jira Subtasks URLs, Tags)
   const filteredTasks = useMemo(() => {
     return tasks.filter((task) => {
-      // Search
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const matchesTitle = task.title.toLowerCase().includes(q);
-        const matchesDesc = task.description.toLowerCase().includes(q);
+        const matchesDesc = (task.description || '').toLowerCase().includes(q);
+        const matchesJiraTask = (task.jiraTaskUrl || '').toLowerCase().includes(q);
+        const subtasks = getSubtaskUrls(task);
+        const matchesJiraSubtask = subtasks.some((s) => s.toLowerCase().includes(q));
         const matchesTag = task.tags.some((t) => t.toLowerCase().includes(q));
-        if (!matchesTitle && !matchesDesc && !matchesTag) return false;
+        if (!matchesTitle && !matchesDesc && !matchesJiraTask && !matchesJiraSubtask && !matchesTag) {
+          return false;
+        }
       }
-      // Status
       if (statusFilter !== 'all' && task.status !== statusFilter) return false;
-      // Priority
       if (priorityFilter !== 'all' && task.priority !== priorityFilter) return false;
       return true;
     });
@@ -106,10 +154,18 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
     e.preventDefault();
     if (!quickTitle.trim()) return;
 
+    // Parse subtasks (allow comma, semicolon or newline separated links/keys)
+    const subtaskUrls = quickJiraSubtasksText
+      .split(/[\n,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
     const newTask: Task = {
       id: `task-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       title: quickTitle.trim(),
-      description: '',
+      jiraTaskUrl: quickJiraTaskUrl.trim() || undefined,
+      jiraSubtaskUrls: subtaskUrls.length > 0 ? subtaskUrls : undefined,
+      description: quickDescription.trim(),
       status: quickStatus,
       priority: quickPriority,
       tags: quickTag ? quickTag.split(',').map((t) => t.trim()).filter(Boolean) : [],
@@ -119,6 +175,9 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
 
     setTasks((prev) => [newTask, ...prev]);
     setQuickTitle('');
+    setQuickJiraTaskUrl('');
+    setQuickJiraSubtasksText('');
+    setQuickDescription('');
     setQuickDueDate('');
     setQuickTag('');
     showToast('Đã thêm công việc mới');
@@ -172,11 +231,54 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
     showToast(`Đã dọn dẹp ${removedCount} công việc đã hoàn thành`);
   };
 
+  const copyToClipboard = (text: string, label: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    navigator.clipboard.writeText(text);
+    showToast(`Đã chép ${label}`);
+  };
+
+  // Subtask management in Edit Modal
+  const handleAddSubtaskToEditing = () => {
+    if (!editingTask || !newSubtaskInput.trim()) return;
+    const splitUrls = newSubtaskInput
+      .split(/[\n,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const currentList = getSubtaskUrls(editingTask);
+    const updated = [...currentList, ...splitUrls];
+    setEditingTask({
+      ...editingTask,
+      jiraSubtaskUrls: updated,
+    });
+    setNewSubtaskInput('');
+    showToast(`Đã thêm ${splitUrls.length} link subtask`);
+  };
+
+  const handleRemoveSubtaskFromEditing = (index: number) => {
+    if (!editingTask) return;
+    const currentList = getSubtaskUrls(editingTask);
+    const updated = currentList.filter((_, idx) => idx !== index);
+    setEditingTask({
+      ...editingTask,
+      jiraSubtaskUrls: updated,
+    });
+  };
+
+  const handleUpdateSubtaskInEditing = (index: number, val: string) => {
+    if (!editingTask) return;
+    const currentList = [...getSubtaskUrls(editingTask)];
+    currentList[index] = val;
+    setEditingTask({
+      ...editingTask,
+      jiraSubtaskUrls: currentList,
+    });
+  };
+
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-neutral-100/50 dark:bg-neutral-950 overflow-y-auto">
       {/* Top Banner: Quick Summary & Filter bar */}
       <div className="px-4 md:px-8 pt-6 pb-4 border-b border-neutral-200 dark:border-neutral-800/80 bg-white dark:bg-neutral-900/30">
-        {/* Metric Bar (Unboxed text with separators per design constitution) */}
+        {/* Metric Bar */}
         <div className="flex flex-wrap items-center justify-between gap-4 mb-5">
           <div className="flex items-center gap-3 text-xs text-neutral-500 dark:text-neutral-400 font-mono">
             <span>Tổng cộng: <strong className="text-neutral-900 dark:text-neutral-100 tabular-nums">{stats.total}</strong></span>
@@ -234,7 +336,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
               type="text"
               value={quickTitle}
               onChange={(e) => setQuickTitle(e.target.value)}
-              placeholder="Nhập task mới và nhấn Enter... (VD: Soát lại schema JSON khách hàng)"
+              placeholder="Nhập tiêu đề task mới và nhấn Enter... (VD: Tích hợp thanh toán QR)"
               className="flex-1 bg-transparent text-xs text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-none px-1"
             />
             
@@ -256,21 +358,24 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
               onChange={(e) => setQuickPriority(e.target.value as TaskPriority)}
               className="bg-neutral-100 dark:bg-neutral-800 border-0 rounded text-[11px] font-medium text-neutral-700 dark:text-neutral-300 py-1 px-2 focus:outline-none"
             >
-              <option value="low">Ưu tiên Thấp</option>
-              <option value="medium">Ưu tiên Vừa</option>
-              <option value="high">Ưu tiên Cao</option>
-              <option value="urgent">Khẩn cấp</option>
+              <option value="low">Thấp</option>
+              <option value="medium">Vừa</option>
+              <option value="high">Cao</option>
+              <option value="urgent">Gấp</option>
             </select>
 
             <button
               type="button"
               onClick={() => setIsExpandingAdd(!isExpandingAdd)}
-              title="Thêm chi tiết (Ngày, Tag)"
-              className={`p-1 text-xs text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 rounded ${
-                isExpandingAdd || quickDueDate || quickTag ? 'text-neutral-900 dark:text-white' : ''
+              title="Thêm link Jira, danh sách subtasks hoặc ghi chú"
+              className={`flex items-center gap-1 px-2 py-1 text-xs rounded transition-colors ${
+                isExpandingAdd || quickJiraTaskUrl || quickJiraSubtasksText || quickDescription
+                  ? 'bg-neutral-200 dark:bg-neutral-800 text-neutral-900 dark:text-white font-medium'
+                  : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
               }`}
             >
-              <Calendar className="w-3.5 h-3.5" />
+              <Link2 className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Jira & Ghi chú</span>
             </button>
 
             <button
@@ -282,30 +387,70 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
             </button>
           </div>
 
-          {/* Optional Expanded Add Bar */}
+          {/* Expanded Add Bar: Jira task, Jira subtask(s), Ghi chú, Deadline, Tag */}
           {isExpandingAdd && (
-            <div className="mt-2 flex flex-wrap items-center gap-3 px-2 py-2 text-xs bg-neutral-50 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 rounded-md animate-in fade-in">
-              <div className="flex items-center gap-1.5">
-                <Calendar className="w-3.5 h-3.5 text-neutral-400" />
-                <span className="text-neutral-500">Hạn chót:</span>
-                <input
-                  type="date"
-                  value={quickDueDate}
-                  onChange={(e) => setQuickDueDate(e.target.value)}
-                  className="bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded px-2 py-0.5 text-xs text-neutral-800 dark:text-neutral-200 focus:outline-none"
+            <div className="mt-2 p-3 text-xs bg-neutral-50 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 rounded-md flex flex-col gap-2.5 animate-in fade-in">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                {/* Link task Jira */}
+                <div className="flex items-center gap-2 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded px-2.5 py-1.5">
+                  <Link2 className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                  <input
+                    type="text"
+                    value={quickJiraTaskUrl}
+                    onChange={(e) => setQuickJiraTaskUrl(e.target.value)}
+                    placeholder="Link task Jira chính (VD: https://jira.../browse/PROJ-101 hoặc PROJ-101)"
+                    className="flex-1 bg-transparent text-xs text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-none"
+                  />
+                </div>
+
+                {/* Link subtask(s) Jira - Hỗ trợ nhiều link */}
+                <div className="flex items-center gap-2 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded px-2.5 py-1.5">
+                  <Link2 className="w-3.5 h-3.5 text-sky-500 shrink-0" />
+                  <input
+                    type="text"
+                    value={quickJiraSubtasksText}
+                    onChange={(e) => setQuickJiraSubtasksText(e.target.value)}
+                    placeholder="Các link subtask (phân cách bằng dấu phẩy: PROJ-102, PROJ-103)"
+                    className="flex-1 bg-transparent text-xs text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Ghi chú */}
+              <div className="flex items-start gap-2 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded px-2.5 py-1.5">
+                <FileText className="w-3.5 h-3.5 text-neutral-400 mt-1 shrink-0" />
+                <textarea
+                  rows={2}
+                  value={quickDescription}
+                  onChange={(e) => setQuickDescription(e.target.value)}
+                  placeholder="Ghi chú chi tiết, các điểm cần kiểm tra..."
+                  className="flex-1 bg-transparent text-xs text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-none resize-none leading-relaxed"
                 />
               </div>
 
-              <div className="flex items-center gap-1.5 flex-1 min-w-[200px]">
-                <Tag className="w-3.5 h-3.5 text-neutral-400" />
-                <span className="text-neutral-500">Thẻ (phẩy):</span>
-                <input
-                  type="text"
-                  value={quickTag}
-                  onChange={(e) => setQuickTag(e.target.value)}
-                  placeholder="Dev, Bug, Design..."
-                  className="flex-1 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded px-2 py-0.5 text-xs text-neutral-800 dark:text-neutral-200 focus:outline-none"
-                />
+              <div className="flex flex-wrap items-center gap-4 text-neutral-500">
+                <div className="flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-neutral-400" />
+                  <span>Hạn chót:</span>
+                  <input
+                    type="date"
+                    value={quickDueDate}
+                    onChange={(e) => setQuickDueDate(e.target.value)}
+                    className="bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded px-2 py-0.5 text-xs text-neutral-800 dark:text-neutral-200 focus:outline-none"
+                  />
+                </div>
+
+                <div className="flex items-center gap-1.5 flex-1 min-w-[200px]">
+                  <Tag className="w-3.5 h-3.5 text-neutral-400" />
+                  <span>Thẻ:</span>
+                  <input
+                    type="text"
+                    value={quickTag}
+                    onChange={(e) => setQuickTag(e.target.value)}
+                    placeholder="Dev, Bug, Backend..."
+                    className="flex-1 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded px-2 py-0.5 text-xs text-neutral-800 dark:text-neutral-200 focus:outline-none"
+                  />
+                </div>
               </div>
             </div>
           )}
@@ -374,7 +519,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
               className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded px-2 py-1 text-xs text-neutral-700 dark:text-neutral-300 focus:outline-none"
             >
               <option value="all">Tất cả mức</option>
-              <option value="urgent">Chỉ Khẩn cấp</option>
+              <option value="urgent">Chỉ Gấp</option>
               <option value="high">Chỉ Mức Cao</option>
               <option value="medium">Chỉ Mức Vừa</option>
               <option value="low">Chỉ Mức Thấp</option>
@@ -393,7 +538,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
             </h3>
             <p className="text-xs text-neutral-500 mt-1 max-w-sm">
               {searchQuery
-                ? `Không tìm thấy task nào với từ khóa "${searchQuery}". Hãy thử tìm cụm từ khác.`
+                ? `Không tìm thấy task nào với từ khóa "${searchQuery}". Hãy thử tìm mã Jira hoặc cụm từ khác.`
                 : 'Bạn đang không có task nào trong bộ lọc này. Hãy thêm task mới ở thanh phía trên.'}
             </p>
           </div>
@@ -404,19 +549,21 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
               const isDone = task.status === 'done';
               const priorityInfo = PRIORITY_CONFIG[task.priority];
               const isOverdue = task.dueDate && !isDone && new Date(task.dueDate).getTime() < new Date().setHours(0,0,0,0);
+              const jiraTaskKey = getJiraKey(task.jiraTaskUrl);
+              const subtasks = getSubtaskUrls(task);
 
               return (
                 <div
                   key={task.id}
-                  className={`group flex items-center justify-between px-4 py-3 hover:bg-neutral-50 dark:hover:bg-neutral-800/40 transition-colors ${
+                  className={`group flex items-start justify-between px-4 py-3 hover:bg-neutral-50 dark:hover:bg-neutral-800/40 transition-colors ${
                     isDone ? 'opacity-60 bg-neutral-50/50 dark:bg-neutral-950/20' : ''
                   }`}
                 >
-                  <div className="flex items-center gap-3 min-w-0 flex-1 mr-4">
+                  <div className="flex items-start gap-3 min-w-0 flex-1 mr-4">
                     {/* Checkbox */}
                     <button
                       onClick={() => toggleTaskDone(task.id)}
-                      className="shrink-0 text-neutral-400 hover:text-neutral-800 dark:hover:text-white transition-colors"
+                      className="mt-0.5 shrink-0 text-neutral-400 hover:text-neutral-800 dark:hover:text-white transition-colors"
                     >
                       {isDone ? (
                         <CheckCircle2 className="w-4 h-4 text-emerald-500 fill-emerald-500/10" />
@@ -427,10 +574,11 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
 
                     {/* Task Title & Details */}
                     <div className="flex flex-col min-w-0 flex-1">
-                      <div className="flex items-baseline gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {/* 1. Tiêu đề */}
                         <span
                           onClick={() => setEditingTask(task)}
-                          className={`text-xs font-medium cursor-pointer truncate ${
+                          className={`text-xs font-semibold cursor-pointer truncate ${
                             isDone
                               ? 'line-through text-neutral-400 dark:text-neutral-500'
                               : 'text-neutral-900 dark:text-neutral-100 hover:underline'
@@ -438,11 +586,55 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                         >
                           {task.title}
                         </span>
+
+                        {/* 2. Link task Jira */}
+                        {task.jiraTaskUrl && (
+                          <a
+                            href={toClickableUrl(task.jiraTaskUrl)}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-mono font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/50 border border-blue-200 dark:border-blue-900 transition-colors shrink-0"
+                            title={`Mở task Jira chính: ${task.jiraTaskUrl}`}
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            <span>Jira: {jiraTaskKey}</span>
+                          </a>
+                        )}
+
+                        {/* 3. Danh sách Link subtask Jira (hỗ trợ nhiều subtasks) */}
+                        {subtasks.map((subUrl, idx) => {
+                          const subKey = getJiraKey(subUrl);
+                          return (
+                            <a
+                              key={idx}
+                              href={toClickableUrl(subUrl)}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-mono font-medium text-sky-600 dark:text-sky-400 hover:bg-sky-50 dark:hover:bg-sky-950/50 border border-sky-200 dark:border-sky-900 transition-colors shrink-0"
+                              title={`Mở subtask Jira: ${subUrl}`}
+                            >
+                              <ExternalLink className="w-2.5 h-2.5" />
+                              <span>Sub: {subKey}</span>
+                            </a>
+                          );
+                        })}
                       </div>
 
-                      {/* Clean Unboxed Metadata (Design Constitution Section 1A) */}
-                      <div className="flex flex-wrap items-center gap-2 mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
-                        {/* Priority indicator */}
+                      {/* 4. Ghi chú */}
+                      {task.description && (
+                        <p
+                          onClick={() => setEditingTask(task)}
+                          className="text-[11px] text-neutral-600 dark:text-neutral-400 mt-1 line-clamp-2 cursor-pointer hover:text-neutral-900 dark:hover:text-neutral-200"
+                        >
+                          {task.description}
+                        </p>
+                      )}
+
+                      {/* Clean Unboxed Metadata */}
+                      <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[11px] text-neutral-500 dark:text-neutral-400">
+                        {/* Priority */}
                         <span className={`font-medium ${priorityInfo.color}`}>
                           {priorityInfo.label}
                         </span>
@@ -462,15 +654,6 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                           <>
                             <span aria-hidden="true" className="text-neutral-300 dark:text-neutral-700">·</span>
                             <span>{task.tags.join(', ')}</span>
-                          </>
-                        )}
-
-                        {task.description && (
-                          <>
-                            <span aria-hidden="true" className="text-neutral-300 dark:text-neutral-700">·</span>
-                            <span className="truncate max-w-[200px] text-neutral-400 italic">
-                              {task.description}
-                            </span>
                           </>
                         )}
                       </div>
@@ -537,66 +720,104 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                   </div>
 
                   <div className="flex flex-col gap-2 flex-1">
-                    {columnTasks.map((task) => (
-                      <div
-                        key={task.id}
-                        className="p-3 bg-white dark:bg-neutral-800/90 rounded border border-neutral-200 dark:border-neutral-700/60 shadow-xs hover:border-neutral-400 dark:hover:border-neutral-600 transition-all flex flex-col gap-2 cursor-pointer"
-                        onClick={() => setEditingTask(task)}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <span className="text-xs font-medium text-neutral-900 dark:text-neutral-100 line-clamp-2">
-                            {task.title}
-                          </span>
-                          <span className={`text-[10px] font-semibold shrink-0 ${PRIORITY_CONFIG[task.priority].color}`}>
-                            {PRIORITY_CONFIG[task.priority].label}
-                          </span>
-                        </div>
+                    {columnTasks.map((task) => {
+                      const jiraTaskKey = getJiraKey(task.jiraTaskUrl);
+                      const subtasks = getSubtaskUrls(task);
 
-                        {task.description && (
-                          <p className="text-[11px] text-neutral-500 dark:text-neutral-400 line-clamp-2">
-                            {task.description}
-                          </p>
-                        )}
-
-                        <div className="flex items-center justify-between pt-1 border-t border-neutral-100 dark:border-neutral-700/50 text-[10px] text-neutral-400">
-                          {task.dueDate ? (
-                            <span className="font-mono flex items-center gap-1">
-                              <Calendar className="w-3 h-3" />
-                              {task.dueDate}
+                      return (
+                        <div
+                          key={task.id}
+                          className="p-3 bg-white dark:bg-neutral-800/90 rounded border border-neutral-200 dark:border-neutral-700/60 shadow-xs hover:border-neutral-400 dark:hover:border-neutral-600 transition-all flex flex-col gap-2 cursor-pointer"
+                          onClick={() => setEditingTask(task)}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            {/* 1. Tiêu đề */}
+                            <span className="text-xs font-semibold text-neutral-900 dark:text-neutral-100 line-clamp-2">
+                              {task.title}
                             </span>
-                          ) : (
-                            <span>{task.tags.join(', ') || 'Không thẻ'}</span>
+                            <span className={`text-[10px] font-semibold shrink-0 ${PRIORITY_CONFIG[task.priority].color}`}>
+                              {PRIORITY_CONFIG[task.priority].label}
+                            </span>
+                          </div>
+
+                          {/* 2 & 3. Link Jira Task & Multiple Subtask badges */}
+                          {(task.jiraTaskUrl || subtasks.length > 0) && (
+                            <div className="flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                              {task.jiraTaskUrl && (
+                                <a
+                                  href={toClickableUrl(task.jiraTaskUrl)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-900 hover:underline"
+                                  title={task.jiraTaskUrl}
+                                >
+                                  <ExternalLink className="w-2.5 h-2.5" />
+                                  <span>Jira: {jiraTaskKey}</span>
+                                </a>
+                              )}
+                              {subtasks.map((subUrl, idx) => (
+                                <a
+                                  key={idx}
+                                  href={toClickableUrl(subUrl)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono text-sky-600 dark:text-sky-400 bg-sky-50 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-900 hover:underline"
+                                  title={subUrl}
+                                >
+                                  <ExternalLink className="w-2.5 h-2.5" />
+                                  <span>Sub: {getJiraKey(subUrl)}</span>
+                                </a>
+                              ))}
+                            </div>
                           )}
 
-                          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                            {colStatus !== 'todo' && (
-                              <button
-                                onClick={() => {
-                                  const prev = colStatus === 'done' ? 'review' : colStatus === 'review' ? 'in_progress' : 'todo';
-                                  updateTaskStatus(task.id, prev);
-                                }}
-                                className="px-1 py-0.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-400"
-                                title="Lùi lại một bước"
-                              >
-                                ←
-                              </button>
+                          {/* 4. Ghi chú */}
+                          {task.description && (
+                            <p className="text-[11px] text-neutral-500 dark:text-neutral-400 line-clamp-2 leading-relaxed">
+                              {task.description}
+                            </p>
+                          )}
+
+                          <div className="flex items-center justify-between pt-1 border-t border-neutral-100 dark:border-neutral-700/50 text-[10px] text-neutral-400">
+                            {task.dueDate ? (
+                              <span className="font-mono flex items-center gap-1">
+                                <Calendar className="w-3 h-3" />
+                                {task.dueDate}
+                              </span>
+                            ) : (
+                              <span>{task.tags.join(', ') || 'Không thẻ'}</span>
                             )}
-                            {colStatus !== 'done' && (
-                              <button
-                                onClick={() => {
-                                  const next = colStatus === 'todo' ? 'in_progress' : colStatus === 'in_progress' ? 'review' : 'done';
-                                  updateTaskStatus(task.id, next);
-                                }}
-                                className="px-1 py-0.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-400"
-                                title="Tiến lên một bước"
-                              >
-                                →
-                              </button>
-                            )}
+
+                            <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                              {colStatus !== 'todo' && (
+                                <button
+                                  onClick={() => {
+                                    const prev = colStatus === 'done' ? 'review' : colStatus === 'review' ? 'in_progress' : 'todo';
+                                    updateTaskStatus(task.id, prev);
+                                  }}
+                                  className="px-1 py-0.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-400"
+                                  title="Lùi lại một bước"
+                                >
+                                  ←
+                                </button>
+                              )}
+                              {colStatus !== 'done' && (
+                                <button
+                                  onClick={() => {
+                                    const next = colStatus === 'todo' ? 'in_progress' : colStatus === 'in_progress' ? 'review' : 'done';
+                                    updateTaskStatus(task.id, next);
+                                  }}
+                                  className="px-1 py-0.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-400"
+                                  title="Tiến lên một bước"
+                                >
+                                  →
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
 
                     {columnTasks.length === 0 && (
                       <div className="flex-1 flex items-center justify-center text-[11px] text-neutral-400 py-6">
@@ -614,10 +835,10 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
       {/* Edit Task Drawer / Modal */}
       {editingTask && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-lg max-w-lg w-full p-5 shadow-xl flex flex-col gap-4 animate-in fade-in zoom-in-95">
+          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-lg max-w-lg w-full p-5 shadow-xl flex flex-col gap-4 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 pb-3">
               <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
-                Chỉnh sửa công việc
+                Chỉnh sửa công việc & Link Jira
               </h3>
               <button
                 onClick={() => setEditingTask(null)}
@@ -627,32 +848,154 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
               </button>
             </div>
 
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-3.5">
+              {/* 1. Tiêu đề task */}
               <div>
-                <label className="text-[11px] font-medium text-neutral-500 block mb-1">
-                  Tiêu đề công việc
+                <label className="text-[11px] font-semibold text-neutral-700 dark:text-neutral-300 block mb-1">
+                  1. Tiêu đề công việc
                 </label>
                 <input
                   type="text"
                   value={editingTask.title}
                   onChange={(e) => setEditingTask({ ...editingTask, title: e.target.value })}
+                  placeholder="Nhập tiêu đề task..."
                   className="w-full text-xs p-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-900 dark:text-white focus:outline-none"
                 />
               </div>
 
+              {/* 2. Link task Jira chính */}
               <div>
-                <label className="text-[11px] font-medium text-neutral-500 block mb-1">
-                  Mô tả / Checklist
-                </label>
-                <textarea
-                  rows={3}
-                  value={editingTask.description}
-                  onChange={(e) => setEditingTask({ ...editingTask, description: e.target.value })}
-                  placeholder="Ghi chú chi tiết hoặc các bước thực hiện..."
-                  className="w-full text-xs p-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-900 dark:text-white focus:outline-none resize-none"
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] font-semibold text-neutral-700 dark:text-neutral-300">
+                    2. Link task Jira chính
+                  </label>
+                  {editingTask.jiraTaskUrl && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={(e) => copyToClipboard(editingTask.jiraTaskUrl || '', 'link task Jira', e)}
+                        className="text-[10px] text-neutral-500 hover:text-neutral-900 dark:hover:text-white flex items-center gap-1"
+                      >
+                        <Copy className="w-3 h-3" />
+                        <span>Copy</span>
+                      </button>
+                      <a
+                        href={toClickableUrl(editingTask.jiraTaskUrl)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[10px] text-blue-500 hover:underline flex items-center gap-0.5"
+                      >
+                        <span>Mở Jira</span>
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                    </div>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  value={editingTask.jiraTaskUrl || ''}
+                  onChange={(e) => setEditingTask({ ...editingTask, jiraTaskUrl: e.target.value })}
+                  placeholder="https://your-domain.atlassian.net/browse/PROJ-123"
+                  className="w-full text-xs p-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-900 dark:text-white font-mono focus:outline-none"
                 />
               </div>
 
+              {/* 3. Danh sách Link subtask Jira (Nhiều subtask) */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[11px] font-semibold text-neutral-700 dark:text-neutral-300">
+                    3. Danh sách link subtask Jira ({getSubtaskUrls(editingTask).length})
+                  </label>
+                  <span className="text-[10px] text-neutral-400">
+                    Có thể có nhiều subtasks
+                  </span>
+                </div>
+
+                {/* Subtasks List */}
+                <div className="flex flex-col gap-1.5 mb-2">
+                  {getSubtaskUrls(editingTask).map((subUrl, idx) => (
+                    <div key={idx} className="flex items-center gap-1.5 bg-neutral-50 dark:bg-neutral-800/80 p-1.5 rounded border border-neutral-200 dark:border-neutral-700">
+                      <span className="text-[10px] font-mono text-neutral-400 w-4 text-center">
+                        {idx + 1}.
+                      </span>
+                      <input
+                        type="text"
+                        value={subUrl}
+                        onChange={(e) => handleUpdateSubtaskInEditing(idx, e.target.value)}
+                        placeholder="Link hoặc mã subtask Jira..."
+                        className="flex-1 bg-transparent text-xs text-neutral-900 dark:text-white font-mono focus:outline-none"
+                      />
+                      <a
+                        href={toClickableUrl(subUrl)}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="Mở tab mới"
+                        className="p-1 text-sky-500 hover:text-sky-600 rounded"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                      <button
+                        type="button"
+                        onClick={(e) => copyToClipboard(subUrl, 'link subtask', e)}
+                        title="Sao chép link"
+                        className="p-1 text-neutral-400 hover:text-neutral-700 dark:hover:text-white rounded"
+                      >
+                        <Copy className="w-3 h-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveSubtaskFromEditing(idx)}
+                        title="Xóa subtask này"
+                        className="p-1 text-neutral-400 hover:text-rose-500 rounded"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Add new subtask input bar */}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={newSubtaskInput}
+                    onChange={(e) => setNewSubtaskInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddSubtaskToEditing();
+                      }
+                    }}
+                    placeholder="Dán link hoặc mã subtask mới (VD: PROJ-102, PROJ-103)..."
+                    className="flex-1 text-xs p-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-900 dark:text-white font-mono focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddSubtaskToEditing}
+                    disabled={!newSubtaskInput.trim()}
+                    className="flex items-center gap-1 px-3 py-2 text-xs font-medium bg-neutral-100 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 disabled:opacity-40 transition-colors"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>Thêm</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 4. Ghi chú */}
+              <div>
+                <label className="text-[11px] font-semibold text-neutral-700 dark:text-neutral-300 block mb-1">
+                  4. Ghi chú
+                </label>
+                <textarea
+                  rows={3}
+                  value={editingTask.description || ''}
+                  onChange={(e) => setEditingTask({ ...editingTask, description: e.target.value })}
+                  placeholder="Ghi chú chi tiết, các điểm cần kiểm tra, kết quả trao đổi..."
+                  className="w-full text-xs p-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-900 dark:text-white focus:outline-none resize-none leading-relaxed"
+                />
+              </div>
+
+              {/* Status & Priority */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[11px] font-medium text-neutral-500 block mb-1">
@@ -682,11 +1025,12 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                     <option value="low">Thấp</option>
                     <option value="medium">Vừa</option>
                     <option value="high">Cao</option>
-                    <option value="urgent">Khẩn cấp</option>
+                    <option value="urgent">Gấp</option>
                   </select>
                 </div>
               </div>
 
+              {/* Deadline & Tags */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[11px] font-medium text-neutral-500 block mb-1">
@@ -713,6 +1057,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                         tags: e.target.value.split(',').map((t) => t.trim()).filter(Boolean),
                       })
                     }
+                    placeholder="Dev, Bug, API..."
                     className="w-full text-xs p-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-900 dark:text-white focus:outline-none"
                   />
                 </div>
@@ -746,7 +1091,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                     setEditingTask(null);
                     showToast('Đã lưu thay đổi công việc');
                   }}
-                  className="px-3 py-1.5 text-xs bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 font-medium rounded hover:bg-neutral-800 dark:hover:bg-neutral-200"
+                  className="px-3.5 py-1.5 text-xs bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 font-medium rounded hover:bg-neutral-800 dark:hover:bg-neutral-200 transition-colors"
                 >
                   Lưu thay đổi
                 </button>
