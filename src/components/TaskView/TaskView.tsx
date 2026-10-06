@@ -15,7 +15,12 @@ import {
   Copy,
   PlusCircle,
   X,
-  Layers
+  Layers,
+  Pencil,
+  Clock,
+  ListPlus,
+  Check,
+  CornerDownLeft
 } from 'lucide-react';
 import { Task, TaskPriority, TaskStatus } from '../../types';
 import { useToast } from '../../context/ToastContext';
@@ -120,9 +125,13 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [newSubtaskInput, setNewSubtaskInput] = useState('');
 
-  // Inline subtask popover state (which task is currently having an inline subtask added)
+  // Inline subtask popover state
   const [inlineAddingTaskId, setInlineAddingTaskId] = useState<string | null>(null);
   const [inlineSubtaskText, setInlineSubtaskText] = useState('');
+
+  // Inline Note Editor state (Quick inline editing without opening full modal)
+  const [inlineEditingNoteTaskId, setInlineEditingNoteTaskId] = useState<string | null>(null);
+  const [inlineNoteText, setInlineNoteText] = useState('');
 
   // Filter tasks (matches Title, Description, Jira Task URL, Jira Subtasks URLs, Tags)
   const filteredTasks = useMemo(() => {
@@ -173,7 +182,6 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
       return;
     }
 
-    // Parse subtasks for THIS specific new task only
     const subtaskUrls = quickJiraSubtasksText
       .split(/[\n,;]+/)
       .map((s) => s.trim())
@@ -183,7 +191,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
       id: `task-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       title: quickTitle.trim(),
       jiraTaskUrl: quickJiraTaskUrl.trim() || undefined,
-      jiraSubtaskUrls: [...subtaskUrls], // Fresh isolated array
+      jiraSubtaskUrls: [...subtaskUrls],
       description: quickDescription.trim(),
       status: quickStatus,
       priority: quickPriority,
@@ -194,7 +202,6 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
 
     setTasks((prev) => [newTask, ...prev]);
 
-    // Reset ALL inputs and collapse expanded panel immediately
     setQuickTitle('');
     setQuickJiraTaskUrl('');
     setQuickJiraSubtasksText('');
@@ -259,7 +266,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
     showToast(`Đã chép ${label}`);
   };
 
-  // Add subtask directly to a specific task (from inline row or kanban)
+  // Add subtask directly to a specific task
   const handleAddInlineSubtask = (taskId: string, e?: React.FormEvent | React.MouseEvent) => {
     e?.preventDefault();
     e?.stopPropagation();
@@ -316,6 +323,31 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
     showToast('Đã xóa subtask khỏi task này');
   };
 
+  // --- Inline Note Quick Edit Handlers ---
+  const handleStartInlineNote = (task: Task, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setInlineEditingNoteTaskId(task.id);
+    setInlineNoteText(task.description || '');
+  };
+
+  const handleSaveInlineNote = (taskId: string, e?: React.SyntheticEvent) => {
+    e?.preventDefault();
+    e?.stopPropagation();
+    const trimmed = inlineNoteText.trim();
+    setTasks((prev) =>
+      prev.map((t) => (t.id === taskId ? { ...t, description: trimmed } : t))
+    );
+    setInlineEditingNoteTaskId(null);
+    setInlineNoteText('');
+    showToast('Đã lưu ghi chú thành công');
+  };
+
+  const handleCancelInlineNote = (e?: React.SyntheticEvent) => {
+    e?.stopPropagation();
+    setInlineEditingNoteTaskId(null);
+    setInlineNoteText('');
+  };
+
   // Subtask management inside Edit Modal
   const handleAddSubtaskToEditing = () => {
     if (!editingTask || !newSubtaskInput.trim()) return;
@@ -355,15 +387,32 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
     });
   };
 
-  // Save changes from Edit Modal (Auto-includes any pending input in newSubtaskInput)
+  // Quick insertion helpers for Modal Note
+  const insertTimestampToModal = () => {
+    if (!editingTask) return;
+    const now = new Date();
+    const timeStr = `[${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')} ${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}] `;
+    const current = editingTask.description || '';
+    setEditingTask({
+      ...editingTask,
+      description: current ? `${current}\n${timeStr}` : timeStr,
+    });
+  };
+
+  const insertBulletToModal = () => {
+    if (!editingTask) return;
+    const current = editingTask.description || '';
+    setEditingTask({
+      ...editingTask,
+      description: current ? `${current}\n• ` : '• ',
+    });
+  };
+
+  // Save changes from Edit Modal
   const handleSaveEditModal = () => {
     if (!editingTask) return;
 
-    // 1. Existing subtasks in list
     const currentSubtasks = getTaskSubtasks(editingTask);
-
-    // 2. CRITICAL FIX: If user typed in newSubtaskInput and directly clicked "Lưu thay đổi"
-    // without clicking "+ Thêm", automatically include it!
     const pendingFromInput = newSubtaskInput
       .split(/[\n,;]+/)
       .map((s) => s.trim())
@@ -377,17 +426,18 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
       jiraTaskUrl: editingTask.jiraTaskUrl?.trim() || undefined,
       jiraSubtaskUrls: mergedSubtasks,
       jiraSubtaskUrl: undefined,
+      description: editingTask.description?.trim() || '',
     };
 
     setTasks((prev) => prev.map((t) => (t.id === updatedTask.id ? updatedTask : t)));
     setEditingTask(null);
     setNewSubtaskInput('');
-    showToast(`Đã lưu thay đổi thành công (${mergedSubtasks.length} subtask)`);
+    showToast(`Đã lưu thay đổi công việc`);
   };
 
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-neutral-100/50 dark:bg-neutral-950 overflow-y-auto">
-      {/* Top Banner: Quick Summary & Filter bar */}
+      {/* Top Banner */}
       <div className="px-4 md:px-8 pt-6 pb-4 border-b border-neutral-200 dark:border-neutral-800/80 bg-white dark:bg-neutral-900/30">
         {/* Metric Bar */}
         <div className="flex flex-wrap items-center justify-between gap-4 mb-5">
@@ -439,7 +489,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
           </div>
         </div>
 
-        {/* Quick Add Form: Dành riêng cho tạo task mới */}
+        {/* Quick Add Form */}
         <form onSubmit={handleAddTask} className="mb-4">
           <div className="flex items-center gap-2 bg-neutral-50 dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700/80 rounded-md p-1.5 focus-within:border-neutral-500 transition-colors">
             <Plus className="w-4 h-4 text-neutral-400 ml-1.5 shrink-0" />
@@ -497,11 +547,10 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
             </button>
           </div>
 
-          {/* Expanded Add Bar: Chỉ áp dụng khi bấm Thêm cho task mới */}
+          {/* Expanded Add Bar */}
           {isExpandingAdd && (
             <div className="mt-2 p-3 text-xs bg-neutral-50 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 rounded-md flex flex-col gap-2.5 animate-in fade-in">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                {/* Link task Jira */}
                 <div className="flex items-center gap-2 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded px-2.5 py-1.5">
                   <Link2 className="w-3.5 h-3.5 text-blue-500 shrink-0" />
                   <input
@@ -513,7 +562,6 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                   />
                 </div>
 
-                {/* Link subtask(s) Jira */}
                 <div className="flex items-center gap-2 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded px-2.5 py-1.5">
                   <Layers className="w-3.5 h-3.5 text-sky-500 shrink-0" />
                   <input
@@ -534,7 +582,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                   value={quickDescription}
                   onChange={(e) => setQuickDescription(e.target.value)}
                   placeholder="Ghi chú chi tiết, các điểm cần kiểm tra..."
-                  className="flex-1 bg-transparent text-xs text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-none resize-none leading-relaxed"
+                  className="flex-1 bg-transparent text-xs text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-none resize-y min-h-[50px] leading-relaxed"
                 />
               </div>
 
@@ -661,6 +709,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
               const isOverdue = task.dueDate && !isDone && new Date(task.dueDate).getTime() < new Date().setHours(0,0,0,0);
               const jiraTaskKey = getJiraKey(task.jiraTaskUrl);
               const taskSubtasks = getTaskSubtasks(task);
+              const isEditingThisNote = inlineEditingNoteTaskId === task.id;
 
               return (
                 <div
@@ -712,7 +761,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                           </a>
                         )}
 
-                        {/* 3. Danh sách Link subtask riêng của task này */}
+                        {/* 3. Danh sách Link subtask */}
                         {taskSubtasks.map((subUrl, idx) => {
                           const subKey = getJiraKey(subUrl);
                           return (
@@ -743,7 +792,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                           );
                         })}
 
-                        {/* Nút thêm nhanh subtask cho riêng task này */}
+                        {/* Nút thêm nhanh subtask */}
                         {inlineAddingTaskId !== task.id ? (
                           <button
                             type="button"
@@ -792,21 +841,97 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                             </button>
                           </form>
                         )}
+
+                        {/* Nút thêm nhanh ghi chú nếu chưa có ghi chú */}
+                        {!task.description && !isEditingThisNote && (
+                          <button
+                            type="button"
+                            onClick={(e) => handleStartInlineNote(task, e)}
+                            className="inline-flex items-center gap-0.5 text-[10px] text-neutral-400 hover:text-amber-500 transition-colors opacity-0 group-hover:opacity-100 px-1 py-0.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                            title="Thêm nhanh ghi chú cho task này"
+                          >
+                            <FileText className="w-3 h-3" />
+                            <span>Ghi chú</span>
+                          </button>
+                        )}
                       </div>
 
-                      {/* 4. Ghi chú */}
-                      {task.description && (
-                        <p
-                          onClick={() => openEditModal(task)}
-                          className="text-[11px] text-neutral-600 dark:text-neutral-400 mt-1 line-clamp-2 cursor-pointer hover:text-neutral-900 dark:hover:text-neutral-200"
+                      {/* 4. Sửa nhanh Ghi chú trực tiếp (Inline Note Editor) */}
+                      {isEditingThisNote ? (
+                        <div 
+                          onClick={(e) => e.stopPropagation()} 
+                          className="mt-2 p-2 bg-neutral-50 dark:bg-neutral-800/90 border border-amber-300 dark:border-amber-700 rounded-md shadow-xs flex flex-col gap-2"
                         >
-                          {task.description}
-                        </p>
+                          <div className="flex items-center justify-between text-[11px] text-amber-700 dark:text-amber-300 font-medium">
+                            <span className="flex items-center gap-1">
+                              <FileText className="w-3.5 h-3.5" />
+                              Sửa nhanh ghi chú
+                            </span>
+                            <span className="text-[10px] text-neutral-400 font-normal">
+                              Ctrl + Enter để lưu nhanh · Esc để hủy
+                            </span>
+                          </div>
+
+                          <textarea
+                            autoFocus
+                            rows={3}
+                            value={inlineNoteText}
+                            onChange={(e) => setInlineNoteText(e.target.value)}
+                            onKeyDown={(e) => {
+                              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                                handleSaveInlineNote(task.id, e);
+                              } else if (e.key === 'Escape') {
+                                handleCancelInlineNote(e);
+                              }
+                            }}
+                            placeholder="Nhập ghi chú chi tiết cho task này..."
+                            className="w-full text-xs p-2 bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded text-neutral-900 dark:text-white focus:outline-none resize-y min-h-[60px] leading-relaxed font-sans"
+                          />
+
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={handleCancelInlineNote}
+                              className="px-2.5 py-1 text-xs text-neutral-500 hover:text-neutral-800 dark:hover:text-white transition-colors"
+                            >
+                              Hủy (Esc)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => handleSaveInlineNote(task.id, e)}
+                              className="flex items-center gap-1 px-3 py-1 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 text-xs font-semibold rounded hover:bg-neutral-800 dark:hover:bg-neutral-200 transition-colors shadow-2xs"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              <span>Lưu ghi chú</span>
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        /* Hiển thị ghi chú kèm nút sửa inline một chạm */
+                        task.description && (
+                          <div className="group/note mt-1.5 flex items-start gap-1.5 bg-neutral-50/80 dark:bg-neutral-800/40 p-1.5 rounded border border-neutral-200/60 dark:border-neutral-700/50">
+                            <FileText className="w-3.5 h-3.5 text-neutral-400 shrink-0 mt-0.5" />
+                            <p
+                              onClick={(e) => handleStartInlineNote(task, e)}
+                              title="Bấm vào để sửa nhanh ghi chú"
+                              className="text-[11px] text-neutral-700 dark:text-neutral-300 flex-1 whitespace-pre-wrap leading-relaxed cursor-text hover:text-neutral-950 dark:hover:text-white transition-colors"
+                            >
+                              {task.description}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={(e) => handleStartInlineNote(task, e)}
+                              title="Sửa nhanh ghi chú"
+                              className="text-neutral-400 hover:text-neutral-900 dark:hover:text-white p-0.5 rounded opacity-0 group-hover/note:opacity-100 transition-opacity"
+                            >
+                              <Pencil className="w-3 h-3" />
+                            </button>
+                          </div>
+                        )
                       )}
 
                       {/* Clean Unboxed Metadata */}
                       <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[11px] text-neutral-500 dark:text-neutral-400">
-                        {/* Priority */}
                         <span className={`font-medium ${priorityInfo.color}`}>
                           {priorityInfo.label}
                         </span>
@@ -849,7 +974,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
 
                     <button
                       onClick={() => openEditModal(task)}
-                      title="Sửa chi tiết"
+                      title="Sửa chi tiết (Mở modal)"
                       className="p-1 text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 transition-colors"
                     >
                       <MoreVertical className="w-3.5 h-3.5" />
@@ -895,6 +1020,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                     {columnTasks.map((task) => {
                       const jiraTaskKey = getJiraKey(task.jiraTaskUrl);
                       const taskSubtasks = getTaskSubtasks(task);
+                      const isEditingThisNote = inlineEditingNoteTaskId === task.id;
 
                       return (
                         <div
@@ -903,7 +1029,6 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                           onClick={() => openEditModal(task)}
                         >
                           <div className="flex items-start justify-between gap-2">
-                            {/* 1. Tiêu đề */}
                             <span className="text-xs font-semibold text-neutral-900 dark:text-neutral-100 line-clamp-2">
                               {task.title}
                             </span>
@@ -912,7 +1037,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                             </span>
                           </div>
 
-                          {/* 2 & 3. Link Jira Task & Multiple Subtask badges */}
+                          {/* Link Jira Task & Multiple Subtask badges */}
                           {(task.jiraTaskUrl || taskSubtasks.length > 0) && (
                             <div className="flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
                               {task.jiraTaskUrl && (
@@ -943,11 +1068,39 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                             </div>
                           )}
 
-                          {/* 4. Ghi chú */}
-                          {task.description && (
-                            <p className="text-[11px] text-neutral-500 dark:text-neutral-400 line-clamp-2 leading-relaxed">
-                              {task.description}
-                            </p>
+                          {/* Ghi chú trong Kanban */}
+                          {isEditingThisNote ? (
+                            <div onClick={(e) => e.stopPropagation()} className="p-2 bg-neutral-50 dark:bg-neutral-900 rounded border border-amber-400 flex flex-col gap-1.5">
+                              <textarea
+                                autoFocus
+                                rows={2}
+                                value={inlineNoteText}
+                                onChange={(e) => setInlineNoteText(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                                    handleSaveInlineNote(task.id, e);
+                                  } else if (e.key === 'Escape') {
+                                    handleCancelInlineNote(e);
+                                  }
+                                }}
+                                placeholder="Ghi chú..."
+                                className="w-full text-xs p-1.5 bg-white dark:bg-neutral-800 border rounded text-neutral-900 dark:text-white resize-y"
+                              />
+                              <div className="flex justify-end gap-1.5 text-[10px]">
+                                <button type="button" onClick={handleCancelInlineNote} className="px-2 py-0.5 text-neutral-400">Hủy</button>
+                                <button type="button" onClick={(e) => handleSaveInlineNote(task.id, e)} className="px-2.5 py-0.5 bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 rounded font-medium">Lưu</button>
+                              </div>
+                            </div>
+                          ) : (
+                            task.description && (
+                              <p 
+                                onClick={(e) => handleStartInlineNote(task, e)}
+                                title="Bấm để sửa nhanh ghi chú"
+                                className="text-[11px] text-neutral-600 dark:text-neutral-400 line-clamp-3 leading-relaxed hover:text-neutral-900 dark:hover:text-white cursor-pointer"
+                              >
+                                {task.description}
+                              </p>
+                            )
                           )}
 
                           <div className="flex items-center justify-between pt-1 border-t border-neutral-100 dark:border-neutral-700/50 text-[10px] text-neutral-400">
@@ -1007,7 +1160,16 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
       {/* Edit Task Drawer / Modal */}
       {editingTask && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-lg max-w-lg w-full p-5 shadow-xl flex flex-col gap-4 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
+          <div 
+            onKeyDown={(e) => {
+              // Phím tắt Ctrl+Enter hoặc Cmd+Enter để lưu ngay lập tức ở bất cứ đâu trong modal
+              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault();
+                handleSaveEditModal();
+              }
+            }}
+            className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-lg max-w-lg w-full p-5 shadow-xl flex flex-col gap-4 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto"
+          >
             <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 pb-3">
               <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
                 Chỉnh sửa công việc & Link Jira
@@ -1072,7 +1234,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                 />
               </div>
 
-              {/* 3. Danh sách Link subtask Jira riêng của task này */}
+              {/* 3. Danh sách Link subtask Jira */}
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="text-[11px] font-semibold text-neutral-700 dark:text-neutral-300 flex items-center gap-1.5">
@@ -1086,7 +1248,6 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                   </span>
                 </div>
 
-                {/* Subtasks List */}
                 <div className="flex flex-col gap-1.5 mb-2.5">
                   {getTaskSubtasks(editingTask).map((subUrl, idx) => (
                     <div key={idx} className="flex items-center gap-1.5 bg-neutral-50 dark:bg-neutral-800/80 p-1.5 rounded border border-neutral-200 dark:border-neutral-700">
@@ -1135,7 +1296,6 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                   )}
                 </div>
 
-                {/* Add new subtask input bar */}
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
@@ -1160,23 +1320,65 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                     <span>Thêm</span>
                   </button>
                 </div>
-                <p className="text-[10px] text-neutral-400 mt-1">
-                  Mẹo: Bạn có thể nhập nhiều subtask phân cách bằng dấu phẩy. Khi bấm nút <strong>Lưu thay đổi</strong> bên dưới, subtask đang gõ trong ô cũng sẽ được tự động lưu!
-                </p>
               </div>
 
-              {/* 4. Ghi chú */}
-              <div>
-                <label className="text-[11px] font-semibold text-neutral-700 dark:text-neutral-300 block mb-1">
-                  4. Ghi chú
-                </label>
+              {/* 4. Ghi chú - ĐƯỢC NÂNG CẤP HOÀN TOÀN DỄ THAO TÁC */}
+              <div className="bg-neutral-50 dark:bg-neutral-800/50 p-3 rounded-lg border border-neutral-200 dark:border-neutral-700 flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-semibold text-neutral-800 dark:text-neutral-200 flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 text-amber-500" />
+                    <span>4. Ghi chú công việc</span>
+                  </label>
+
+                  {/* Thanh công cụ trợ giúp nhanh ghi chú */}
+                  <div className="flex items-center gap-1 text-[10px]">
+                    <button
+                      type="button"
+                      onClick={insertTimestampToModal}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white transition-colors"
+                      title="Chèn mốc giờ hiện tại vào ghi chú"
+                    >
+                      <Clock className="w-2.5 h-2.5 text-amber-500" />
+                      <span>+ Giờ</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={insertBulletToModal}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white transition-colors"
+                      title="Chèn dấu đầu dòng"
+                    >
+                      <ListPlus className="w-2.5 h-2.5 text-sky-500" />
+                      <span>• Đầu dòng</span>
+                    </button>
+                    {editingTask.description && (
+                      <button
+                        type="button"
+                        onClick={() => setEditingTask({ ...editingTask, description: '' })}
+                        className="px-1.5 py-0.5 text-neutral-400 hover:text-rose-500 transition-colors"
+                        title="Xóa trắng ghi chú"
+                      >
+                        Xóa trắng
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Textarea linh hoạt, kéo dãn thoải mái (resize-y) */}
                 <textarea
-                  rows={3}
+                  rows={4}
                   value={editingTask.description || ''}
                   onChange={(e) => setEditingTask({ ...editingTask, description: e.target.value })}
-                  placeholder="Ghi chú chi tiết, các điểm cần kiểm tra, kết quả trao đổi..."
-                  className="w-full text-xs p-2 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-900 dark:text-white focus:outline-none resize-none leading-relaxed"
+                  placeholder="Ghi chú chi tiết, các điểm cần kiểm tra, kết quả trao đổi, mã lỗi, log...&#10;(Bấm Ctrl + Enter để lưu nhanh mọi thay đổi)"
+                  className="w-full text-xs p-2.5 bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-md text-neutral-900 dark:text-white focus:outline-none focus:border-neutral-500 resize-y min-h-[90px] leading-relaxed font-sans"
                 />
+
+                <div className="flex items-center justify-between text-[10px] text-neutral-400">
+                  <span className="flex items-center gap-1">
+                    <CornerDownLeft className="w-3 h-3 text-neutral-400" />
+                    Mẹo: Nhấn <strong>Ctrl + Enter</strong> để lưu ngay lập tức
+                  </span>
+                  <span>{editingTask.description?.length || 0} ký tự</span>
+                </div>
               </div>
 
               {/* Status & Priority */}
@@ -1273,7 +1475,7 @@ export const TaskView: React.FC<TaskViewProps> = ({ tasks, setTasks, searchQuery
                   onClick={handleSaveEditModal}
                   className="px-4 py-1.5 text-xs bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 font-semibold rounded hover:bg-neutral-800 dark:hover:bg-neutral-200 transition-colors shadow-xs"
                 >
-                  Lưu thay đổi
+                  Lưu thay đổi (Ctrl+Enter)
                 </button>
               </div>
             </div>
