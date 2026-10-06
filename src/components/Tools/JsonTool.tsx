@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { 
   Check, 
   Copy, 
@@ -12,8 +12,13 @@ import {
   Layers,
   Sparkles,
   ArrowRight,
-  Wand2,
-  HelpCircle,
+  ChevronDown,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Search,
+  Filter,
+  Terminal,
   FileCheck
 } from 'lucide-react';
 import { useToast } from '../../context/ToastContext';
@@ -57,7 +62,7 @@ export interface SmartParseResult {
   cleanedText: string;
 }
 
-// Smart JSON parser with automatic error recovery for HTML entities, escaped strings, Python dicts, etc.
+// Smart JSON parser with automatic error recovery
 export function smartParseJson(raw: string): SmartParseResult {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -72,7 +77,7 @@ export function smartParseJson(raw: string): SmartParseResult {
     // Continue to smart fixing
   }
 
-  // 2. Decode HTML Entities (e.g. &quot; -> ", &#34; -> ", &apos; -> ', &amp; -> &, etc.)
+  // 2. Decode HTML Entities
   if (/&(quot|apos|lt|gt|amp|nbsp|#34|#034|#39|#039|#x22|#x27);/i.test(trimmed)) {
     const decoded = decodeHtmlEntities(trimmed);
     try {
@@ -85,7 +90,7 @@ export function smartParseJson(raw: string): SmartParseResult {
         cleanedText: decoded,
       };
     } catch {
-      // Continue to next steps using the decoded text as candidate
+      // Continue
     }
   }
 
@@ -128,7 +133,7 @@ export function smartParseJson(raw: string): SmartParseResult {
     }
   }
 
-  // 5. Check for URL-encoded JSON (e.g. %7B%22channel%22%3A%22EWAPP%22%7D)
+  // 5. Check for URL-encoded JSON
   if (/%[0-9a-fA-F]{2}/.test(candidate)) {
     try {
       const urlDecoded = decodeHtmlEntities(decodeURIComponent(candidate));
@@ -150,9 +155,8 @@ export function smartParseJson(raw: string): SmartParseResult {
     .replace(/\bTrue\b/g, 'true')
     .replace(/\bFalse\b/g, 'false')
     .replace(/\bNone\b/g, 'null')
-    .replace(/,\s*([\}\]])/g, '$1'); // Remove trailing comma
+    .replace(/,\s*([\}\]])/g, '$1');
 
-  // Replace single quotes with double quotes
   if (relaxed.includes("'")) {
     const singleQuoteFixed = relaxed.replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, '"$1"');
     try {
@@ -169,7 +173,7 @@ export function smartParseJson(raw: string): SmartParseResult {
     }
   }
 
-  // 7. If still invalid, report clear standard error message
+  // 7. Standard error reporting
   try {
     JSON.parse(candidate);
     return { parsed: null, error: null, wasFixed: false, cleanedText: candidate };
@@ -233,7 +237,6 @@ function jsonToCsv(jsonArray: any[]): string {
     return 'Lỗi: Dữ liệu phải là mảng các đối tượng (Array of Objects) để chuyển sang CSV.';
   }
 
-  // Collect all unique headers
   const headers = Array.from(
     new Set(
       jsonArray.flatMap((item) =>
@@ -271,7 +274,12 @@ const SAMPLE_JSON = `{
   "customer": {
     "name": "Nguyễn Văn Minh",
     "email": "minhratlangoan@gmail.com",
-    "tier": "VIP"
+    "tier": "VIP",
+    "preferences": {
+      "newsletter": true,
+      "notifications": false,
+      "theme": "dark"
+    }
   },
   "items": [
     { "id": 1, "product": "Bàn phím cơ không dây", "price": 1250000, "qty": 1 },
@@ -290,13 +298,40 @@ const SAMPLE_HTML_ENTITIES_JSON = `{
 &quot;checksum&quot;: &quot;abcde&quot;
 }`;
 
+// Helper: Collect all object/array paths for depth-level folding
+function collectAllCompoundPaths(data: any, currentPath = '', currentDepth = 0, pathsMap: Map<string, number> = new Map()): Map<string, number> {
+  if (data === null || typeof data !== 'object') return pathsMap;
+
+  if (currentPath) {
+    pathsMap.set(currentPath, currentDepth);
+  }
+
+  if (Array.isArray(data)) {
+    data.forEach((item, idx) => {
+      const childPath = currentPath ? `${currentPath}[${idx}]` : `[${idx}]`;
+      collectAllCompoundPaths(item, childPath, currentDepth + 1, pathsMap);
+    });
+  } else {
+    Object.keys(data).forEach((key) => {
+      const childPath = currentPath ? `${currentPath}.${key}` : key;
+      collectAllCompoundPaths(data[key], childPath, currentDepth + 1, pathsMap);
+    });
+  }
+
+  return pathsMap;
+}
+
 export const JsonTool: React.FC = () => {
   const { showToast } = useToast();
 
   const [inputJson, setInputJson] = useState<string>('');
-  const [outputTab, setOutputTab] = useState<'formatted' | 'yaml' | 'csv' | 'tree'>('formatted');
+  const [outputTab, setOutputTab] = useState<'tree' | 'formatted' | 'yaml' | 'csv'>('tree');
   const [indentSize, setIndentSize] = useState<2 | 4>(2);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  // Collapsible tree state: stores set of collapsed paths (e.g. "customer", "items", "items[0]")
+  const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(new Set());
+  const [treeSearchQuery, setTreeSearchQuery] = useState<string>('');
 
   // Smart Parse state & validation
   const { 
@@ -304,7 +339,6 @@ export const JsonTool: React.FC = () => {
     parseError, 
     wasFixed, 
     fixNotice, 
-    cleanedText,
     formattedString, 
     yamlString, 
     csvString 
@@ -315,14 +349,13 @@ export const JsonTool: React.FC = () => {
         parseError: null,
         wasFixed: false,
         fixNotice: undefined,
-        cleanedText: '',
         formattedString: '',
         yamlString: '',
         csvString: '',
       };
     }
 
-    const { parsed, error, wasFixed, fixNotice, cleanedText } = smartParseJson(inputJson);
+    const { parsed, error, wasFixed, fixNotice } = smartParseJson(inputJson);
 
     if (!parsed) {
       return {
@@ -330,7 +363,6 @@ export const JsonTool: React.FC = () => {
         parseError: error || 'JSON không đúng cú pháp',
         wasFixed,
         fixNotice,
-        cleanedText,
         formattedString: '',
         yamlString: '',
         csvString: '',
@@ -352,12 +384,17 @@ export const JsonTool: React.FC = () => {
       parseError: null,
       wasFixed,
       fixNotice,
-      cleanedText,
       formattedString: formatted,
       yamlString: yaml,
       csvString: csv,
     };
   }, [inputJson, indentSize]);
+
+  // All compound paths map (path -> depth)
+  const compoundPathsMap = useMemo(() => {
+    if (!parsedObj || typeof parsedObj !== 'object') return new Map<string, number>();
+    return collectAllCompoundPaths(parsedObj);
+  }, [parsedObj]);
 
   // Actions
   const handleMinify = () => {
@@ -379,7 +416,6 @@ export const JsonTool: React.FC = () => {
     showToast(wasFixed ? 'Đã khử ký tự lạ và format JSON chuẩn đẹp' : 'Đã format JSON đẹp');
   };
 
-  // Decode HTML entities directly in the input box
   const handleDecodeHtml = () => {
     const decoded = decodeHtmlEntities(inputJson);
     if (decoded === inputJson) {
@@ -388,25 +424,6 @@ export const JsonTool: React.FC = () => {
     }
     setInputJson(decoded);
     showToast('Đã chuyển &quot; thành dấu nháy kép "');
-  };
-
-  // Auto-Fix & Beautify in 1-Click
-  const handleAutoFix = () => {
-    if (parsedObj) {
-      setInputJson(formattedString);
-      showToast('Đã tự động sửa lỗi và làm đẹp JSON');
-      return;
-    }
-    // If not directly parseable, try cleaning HTML entities first
-    const cleaned = decodeHtmlEntities(inputJson);
-    const retry = smartParseJson(cleaned);
-    if (retry.parsed) {
-      const pretty = JSON.stringify(retry.parsed, null, indentSize);
-      setInputJson(pretty);
-      showToast('Đã tự động sửa lỗi và làm đẹp JSON');
-    } else {
-      showToast('Không thể tự động sửa lỗi JSON này', 'error');
-    }
   };
 
   const handleEscapeString = () => {
@@ -436,88 +453,278 @@ export const JsonTool: React.FC = () => {
 
   const handleCopyOutput = () => {
     const textToCopy =
-      outputTab === 'formatted'
+      outputTab === 'formatted' || outputTab === 'tree'
         ? formattedString
         : outputTab === 'yaml'
         ? yamlString
-        : outputTab === 'csv'
-        ? csvString
-        : JSON.stringify(parsedObj, null, 2);
+        : csvString;
 
     navigator.clipboard.writeText(textToCopy);
     showToast('Đã sao chép kết quả');
   };
 
-  const copyPath = (path: string) => {
+  const copyPath = (path: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     navigator.clipboard.writeText(path);
     setCopiedKey(path);
     showToast(`Đã chép đường dẫn: ${path}`);
     setTimeout(() => setCopiedKey(null), 1500);
   };
 
-  // Render Interactive Tree recursively
-  const renderTree = (data: any, path = ''): React.ReactNode => {
-    if (data === null) return <span className="text-rose-500 font-mono">null</span>;
-    if (typeof data === 'boolean') {
-      return <span className="text-amber-500 font-mono">{String(data)}</span>;
-    }
-    if (typeof data === 'number') {
-      return <span className="text-sky-500 font-mono tabular-nums">{data}</span>;
-    }
-    if (typeof data === 'string') {
-      return <span className="text-emerald-500 font-mono">"{data}"</span>;
-    }
+  const copySubtreeJson = (data: any, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const str = typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data);
+    navigator.clipboard.writeText(str);
+    showToast('Đã sao chép nhánh JSON này');
+  };
 
-    if (Array.isArray(data)) {
+  // --- FOLDING / COLLAPSE CONTROLS (Giống Visual Studio Code) ---
+  const togglePathCollapse = useCallback((path: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setCollapsedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleExpandAll = () => {
+    setCollapsedPaths(new Set());
+    showToast('Đã mở rộng tất cả các phần');
+  };
+
+  const handleCollapseAll = () => {
+    const allPaths = new Set(compoundPathsMap.keys());
+    // Also include root marker if needed
+    allPaths.add('__root__');
+    setCollapsedPaths(allPaths);
+    showToast('Đã thu gọn toàn bộ các Object & Array');
+  };
+
+  const handleCollapseToLevel = (targetDepth: number) => {
+    const newCollapsed = new Set<string>();
+    compoundPathsMap.forEach((depth, path) => {
+      if (depth >= targetDepth) {
+        newCollapsed.add(path);
+      }
+    });
+    setCollapsedPaths(newCollapsed);
+    showToast(`Đã thu gọn từ cấp ${targetDepth} trở đi`);
+  };
+
+  // Check if string matches tree search
+  const highlightMatch = (text: string, q: string): React.ReactNode => {
+    if (!q.trim() || !text.toLowerCase().includes(q.toLowerCase())) {
+      return text;
+    }
+    const parts = text.split(new RegExp(`(${q.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')})`, 'gi'));
+    return parts.map((part, i) =>
+      part.toLowerCase() === q.toLowerCase() ? (
+        <mark key={i} className="bg-amber-300 dark:bg-amber-500/50 text-neutral-900 dark:text-white px-0.5 rounded">
+          {part}
+        </mark>
+      ) : (
+        part
+      )
+    );
+  };
+
+  // Render Collapsible Interactive Tree Node
+  const renderCollapsibleNode = (
+    data: any, 
+    keyName?: string, 
+    currentPath = '', 
+    depth = 0,
+    isLast = true
+  ): React.ReactNode => {
+    const isRoot = !currentPath;
+    const isArray = Array.isArray(data);
+    const isObject = typeof data === 'object' && data !== null && !isArray;
+    const isCompound = isArray || isObject;
+    const isCollapsed = collapsedPaths.has(currentPath || '__root__');
+
+    // Primitive values
+    if (!isCompound) {
+      let valueNode: React.ReactNode;
+      if (data === null) {
+        valueNode = <span className="text-rose-500 dark:text-rose-400 font-mono font-medium">null</span>;
+      } else if (typeof data === 'boolean') {
+        valueNode = <span className="text-purple-600 dark:text-purple-400 font-mono font-medium">{String(data)}</span>;
+      } else if (typeof data === 'number') {
+        valueNode = <span className="text-sky-600 dark:text-sky-400 font-mono font-medium tabular-nums">{data}</span>;
+      } else if (typeof data === 'string') {
+        valueNode = (
+          <span className="text-emerald-600 dark:text-emerald-400 font-mono break-all">
+            "{highlightMatch(data, treeSearchQuery)}"
+          </span>
+        );
+      } else {
+        valueNode = <span className="text-neutral-500">{String(data)}</span>;
+      }
+
       return (
-        <div className="pl-4 border-l border-neutral-200 dark:border-neutral-800 flex flex-col gap-1 my-0.5">
-          <span className="text-neutral-400 font-mono text-[11px]">[</span>
-          {data.map((item, index) => {
-            const currentPath = path ? `${path}[${index}]` : `[${index}]`;
-            return (
-              <div key={index} className="flex items-start gap-1 hover:bg-neutral-50 dark:hover:bg-neutral-800/40 p-0.5 rounded">
-                <button
-                  onClick={() => copyPath(currentPath)}
-                  title="Click để copy path"
-                  className="font-mono text-[11px] text-neutral-400 hover:text-neutral-900 dark:hover:text-white"
-                >
-                  {index}:
-                </button>
-                <div className="flex-1">{renderTree(item, currentPath)}</div>
-              </div>
-            );
-          })}
-          <span className="text-neutral-400 font-mono text-[11px]">]</span>
+        <div className="group/item flex items-center gap-1.5 hover:bg-neutral-100/70 dark:hover:bg-neutral-800/40 py-0.5 px-1.5 rounded transition-colors text-xs font-mono">
+          {/* Empty spacer for alignment with chevrons */}
+          <span className="w-4 shrink-0" />
+          
+          {keyName !== undefined && (
+            <span 
+              onClick={(e) => copyPath(currentPath, e)}
+              title={`Click để copy path: ${currentPath}`}
+              className="text-indigo-600 dark:text-sky-400 font-semibold shrink-0 cursor-pointer hover:underline"
+            >
+              "{highlightMatch(keyName, treeSearchQuery)}":
+            </span>
+          )}
+
+          <div className="flex items-center gap-2 min-w-0">
+            {valueNode}
+            {!isLast && <span className="text-neutral-400">,</span>}
+          </div>
+
+          {/* Quick Copy on Hover */}
+          <div className="ml-auto opacity-0 group-hover/item:opacity-100 flex items-center gap-1 pl-2 shrink-0">
+            <button
+              onClick={(e) => copyPath(currentPath, e)}
+              title="Copy path"
+              className="text-[10px] text-neutral-400 hover:text-neutral-900 dark:hover:text-white px-1 py-0.5 rounded bg-neutral-200/50 dark:bg-neutral-800"
+            >
+              Path
+            </button>
+            <button
+              onClick={(e) => copySubtreeJson(data, e)}
+              title="Copy giá trị"
+              className="text-[10px] text-neutral-400 hover:text-neutral-900 dark:hover:text-white px-1 py-0.5 rounded bg-neutral-200/50 dark:bg-neutral-800"
+            >
+              <Copy className="w-2.5 h-2.5" />
+            </button>
+          </div>
         </div>
       );
     }
 
-    if (typeof data === 'object') {
-      const keys = Object.keys(data);
-      return (
-        <div className="pl-4 border-l border-neutral-200 dark:border-neutral-800 flex flex-col gap-1 my-0.5">
-          <span className="text-neutral-400 font-mono text-[11px]">&#123;</span>
-          {keys.map((key) => {
-            const currentPath = path ? `${path}.${key}` : key;
-            return (
-              <div key={key} className="flex items-start gap-1 hover:bg-neutral-50 dark:hover:bg-neutral-800/40 p-0.5 rounded group">
-                <button
-                  onClick={() => copyPath(currentPath)}
-                  title="Click để copy JSON path"
-                  className="font-mono text-[11px] font-semibold text-neutral-700 dark:text-neutral-300 hover:underline hover:text-neutral-950 dark:hover:text-white"
-                >
-                  "{key}":
-                </button>
-                <div className="flex-1">{renderTree(data[key], currentPath)}</div>
-              </div>
-            );
-          })}
-          <span className="text-neutral-400 font-mono text-[11px]">&#125;</span>
-        </div>
-      );
-    }
+    // Compound values: Object or Array
+    const count = isArray ? data.length : Object.keys(data).length;
+    const openBracket = isArray ? '[' : '{';
+    const closeBracket = isArray ? ']' : '}';
+    const summaryBadge = isArray ? `${count} phần tử` : `${count} thuộc tính`;
 
-    return String(data);
+    return (
+      <div className="flex flex-col text-xs font-mono select-text">
+        {/* Header line of object or array with Chevron */}
+        <div 
+          onClick={(e) => togglePathCollapse(currentPath || '__root__', e)}
+          className="group/header flex items-center gap-1.5 hover:bg-neutral-100/70 dark:hover:bg-neutral-800/40 py-0.5 px-1.5 rounded cursor-pointer transition-colors"
+        >
+          {/* VS Code Chevron Fold Button */}
+          <button
+            type="button"
+            className="w-4 h-4 flex items-center justify-center text-neutral-400 group-hover/header:text-neutral-800 dark:group-hover/header:text-white shrink-0 hover:scale-110 transition-transform"
+            title={isCollapsed ? 'Mở rộng (Click để bung ra)' : 'Thu gọn (Click để co lại)'}
+          >
+            {isCollapsed ? (
+              <ChevronRight className="w-3.5 h-3.5 text-neutral-500 hover:text-neutral-900 dark:hover:text-white" />
+            ) : (
+              <ChevronDown className="w-3.5 h-3.5 text-neutral-500 hover:text-neutral-900 dark:hover:text-white" />
+            )}
+          </button>
+
+          {/* Key name if inside parent object */}
+          {keyName !== undefined && (
+            <span 
+              onClick={(e) => copyPath(currentPath, e)}
+              title={`Click để copy path: ${currentPath}`}
+              className="text-indigo-600 dark:text-sky-400 font-semibold shrink-0 hover:underline"
+            >
+              "{highlightMatch(keyName, treeSearchQuery)}":
+            </span>
+          )}
+
+          {/* Brackets & Collapsed Summary */}
+          {isCollapsed ? (
+            <div className="flex items-center gap-1.5 text-neutral-500">
+              <span className="text-neutral-400 font-bold">{openBracket}</span>
+              <span className="px-1.5 py-0.2 bg-neutral-200/80 dark:bg-neutral-800 rounded text-[10px] text-neutral-600 dark:text-neutral-300 font-sans border border-neutral-300/50 dark:border-neutral-700">
+                ... {summaryBadge}
+              </span>
+              <span className="text-neutral-400 font-bold">{closeBracket}</span>
+              {!isLast && <span>,</span>}
+            </div>
+          ) : (
+            <span className="text-neutral-400 font-bold">{openBracket}</span>
+          )}
+
+          {/* Action buttons on hover */}
+          <div className="ml-auto opacity-0 group-hover/header:opacity-100 flex items-center gap-1 pl-2 shrink-0">
+            {currentPath && (
+              <button
+                onClick={(e) => copyPath(currentPath, e)}
+                title={`Copy path: ${currentPath}`}
+                className="text-[10px] text-neutral-400 hover:text-neutral-900 dark:hover:text-white px-1 py-0.5 rounded bg-neutral-200/50 dark:bg-neutral-800 font-sans"
+              >
+                Path
+              </button>
+            )}
+            <button
+              onClick={(e) => copySubtreeJson(data, e)}
+              title="Copy JSON của khối này"
+              className="text-[10px] text-neutral-400 hover:text-neutral-900 dark:hover:text-white px-1.5 py-0.5 rounded bg-neutral-200/50 dark:bg-neutral-800 font-sans flex items-center gap-0.5"
+            >
+              <Copy className="w-2.5 h-2.5" />
+              <span>Copy</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Children (Only shown if NOT collapsed) */}
+        {!isCollapsed && (
+          <div className="pl-4 ml-2 border-l border-neutral-200 dark:border-neutral-800 flex flex-col my-0.5">
+            {isArray ? (
+              data.map((item: any, idx: number) => {
+                const itemPath = currentPath ? `${currentPath}[${idx}]` : `[${idx}]`;
+                return (
+                  <div key={idx}>
+                    {renderCollapsibleNode(
+                      item, 
+                      String(idx), 
+                      itemPath, 
+                      depth + 1, 
+                      idx === data.length - 1
+                    )}
+                  </div>
+                );
+              })
+            ) : (
+              Object.keys(data).map((k: string, idx: number, arr: string[]) => {
+                const childPath = currentPath ? `${currentPath}.${k}` : k;
+                return (
+                  <div key={k}>
+                    {renderCollapsibleNode(
+                      data[k], 
+                      k, 
+                      childPath, 
+                      depth + 1, 
+                      idx === arr.length - 1
+                    )}
+                  </div>
+                );
+              })
+            )}
+
+            {/* Closing Bracket Line */}
+            <div className="flex items-center gap-1 py-0.5 px-1.5 text-neutral-400 font-bold">
+              <span className="w-4 shrink-0" />
+              <span>{closeBracket}</span>
+              {!isLast && <span className="font-normal">,</span>}
+            </div>
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -542,7 +749,7 @@ export const JsonTool: React.FC = () => {
             onClick={handleDecodeHtml}
             disabled={!inputJson.trim()}
             className="flex items-center gap-1 px-2.5 py-1.5 font-medium rounded border border-neutral-300 dark:border-neutral-700 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/60 disabled:opacity-40 transition-colors"
-            title="Khử mã &amp;quot; thành dấu nháy kép"
+            title="Khử mã &quot; thành dấu nháy kép"
           >
             <span>Khử &quot; (HTML)</span>
           </button>
@@ -675,26 +882,38 @@ export const JsonTool: React.FC = () => {
           />
         </div>
 
-        {/* Right: Output Converter */}
+        {/* Right: Output Converter & Collapsible VS Code Tree */}
         <div className="flex-1 flex flex-col bg-white dark:bg-neutral-900 rounded-lg border border-neutral-200 dark:border-neutral-800 min-h-[350px]">
           {/* Output Mode Tabs */}
-          <div className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between text-xs">
+          <div className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-2 text-xs">
             <div className="flex items-center gap-1 bg-neutral-100 dark:bg-neutral-800 p-0.5 rounded">
               <button
+                onClick={() => setOutputTab('tree')}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
+                  outputTab === 'tree'
+                    ? 'bg-white dark:bg-neutral-900 text-neutral-950 dark:text-white shadow-xs font-semibold'
+                    : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
+                }`}
+                title="Xem dạng cây có thể thu gọn/mở rộng từng phần giống VS Code"
+              >
+                <Code2 className="w-3.5 h-3.5 text-sky-500" />
+                <span>Thu gọn VS Code</span>
+              </button>
+              <button
                 onClick={() => setOutputTab('formatted')}
-                className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${
                   outputTab === 'formatted'
-                    ? 'bg-white dark:bg-neutral-900 text-neutral-950 dark:text-white shadow-xs'
+                    ? 'bg-white dark:bg-neutral-900 text-neutral-950 dark:text-white shadow-xs font-semibold'
                     : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
                 }`}
               >
-                JSON Chuẩn
+                Văn bản gốc
               </button>
               <button
                 onClick={() => setOutputTab('yaml')}
-                className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${
                   outputTab === 'yaml'
-                    ? 'bg-white dark:bg-neutral-900 text-neutral-950 dark:text-white shadow-xs'
+                    ? 'bg-white dark:bg-neutral-900 text-neutral-950 dark:text-white shadow-xs font-semibold'
                     : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
                 }`}
               >
@@ -702,23 +921,13 @@ export const JsonTool: React.FC = () => {
               </button>
               <button
                 onClick={() => setOutputTab('csv')}
-                className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${
                   outputTab === 'csv'
-                    ? 'bg-white dark:bg-neutral-900 text-neutral-950 dark:text-white shadow-xs'
+                    ? 'bg-white dark:bg-neutral-900 text-neutral-950 dark:text-white shadow-xs font-semibold'
                     : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
                 }`}
               >
                 CSV
-              </button>
-              <button
-                onClick={() => setOutputTab('tree')}
-                className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
-                  outputTab === 'tree'
-                    ? 'bg-white dark:bg-neutral-900 text-neutral-950 dark:text-white shadow-xs'
-                    : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
-                }`}
-              >
-                Cây (Tree)
               </button>
             </div>
 
@@ -760,8 +969,102 @@ export const JsonTool: React.FC = () => {
             </div>
           </div>
 
+          {/* Sub-toolbar for VS Code Collapsible Tree Mode */}
+          {outputTab === 'tree' && parsedObj && (
+            <div className="px-3 py-1.5 bg-neutral-50/90 dark:bg-neutral-900/60 border-b border-neutral-200 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+              {/* Folding Action Controls */}
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={handleExpandAll}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium text-neutral-600 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-800 transition-colors"
+                  title="Mở bung toàn bộ cây JSON"
+                >
+                  <ChevronsUpDown className="w-3 h-3" />
+                  <span>Mở rộng hết</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCollapseAll}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium text-neutral-600 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-800 transition-colors"
+                  title="Thu gọn tất cả các Object và Array"
+                >
+                  <ChevronsDownUp className="w-3 h-3" />
+                  <span>Thu gọn hết</span>
+                </button>
+
+                <div className="w-[1px] h-3 bg-neutral-300 dark:bg-neutral-700 mx-1" />
+
+                {/* Level presets */}
+                <div className="flex items-center gap-1 text-[11px] text-neutral-500">
+                  <span>Cấp:</span>
+                  <button
+                    type="button"
+                    onClick={() => handleCollapseToLevel(1)}
+                    className="px-1.5 py-0.5 rounded hover:bg-neutral-200 dark:hover:bg-neutral-800 font-mono text-neutral-700 dark:text-neutral-300"
+                    title="Thu gọn từ cấp 1 (chỉ thấy các trường gốc)"
+                  >
+                    1
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleCollapseToLevel(2)}
+                    className="px-1.5 py-0.5 rounded hover:bg-neutral-200 dark:hover:bg-neutral-800 font-mono text-neutral-700 dark:text-neutral-300"
+                    title="Thu gọn từ cấp 2"
+                  >
+                    2
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleCollapseToLevel(3)}
+                    className="px-1.5 py-0.5 rounded hover:bg-neutral-200 dark:hover:bg-neutral-800 font-mono text-neutral-700 dark:text-neutral-300"
+                    title="Thu gọn từ cấp 3"
+                  >
+                    3
+                  </button>
+                </div>
+              </div>
+
+              {/* In-tree Search Filter */}
+              <div className="flex items-center gap-1.5 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded px-2 py-0.5">
+                <Search className="w-3 h-3 text-neutral-400" />
+                <input
+                  type="text"
+                  value={treeSearchQuery}
+                  onChange={(e) => setTreeSearchQuery(e.target.value)}
+                  placeholder="Lọc khóa / giá trị..."
+                  className="bg-transparent text-[11px] text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-none w-28 md:w-36 font-sans"
+                />
+                {treeSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setTreeSearchQuery('')}
+                    className="text-neutral-400 hover:text-neutral-700 dark:hover:text-white text-[10px]"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Output Content */}
           <div className="flex-1 p-4 overflow-auto font-mono text-xs text-neutral-900 dark:text-neutral-100 select-text leading-relaxed">
+            {outputTab === 'tree' && (
+              <div className="flex flex-col">
+                {parsedObj ? (
+                  <div className="pl-1">
+                    {renderCollapsibleNode(parsedObj)}
+                  </div>
+                ) : (
+                  <span className="text-neutral-400 select-none">
+                    Dán JSON vào khung bên trái để xem cây thu gọn giống Visual Studio Code...
+                  </span>
+                )}
+              </div>
+            )}
+
             {outputTab === 'formatted' && (
               <pre className="whitespace-pre break-all">
                 {formattedString || (
@@ -790,18 +1093,6 @@ export const JsonTool: React.FC = () => {
                   </span>
                 )}
               </pre>
-            )}
-
-            {outputTab === 'tree' && (
-              <div className="flex flex-col">
-                {parsedObj ? (
-                  renderTree(parsedObj)
-                ) : (
-                  <span className="text-neutral-400 select-none">
-                    Dạng cây thư mục tương tác sẽ hiển thị ở đây...
-                  </span>
-                )}
-              </div>
             )}
           </div>
         </div>
